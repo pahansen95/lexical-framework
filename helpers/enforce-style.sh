@@ -17,7 +17,7 @@ PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 }
 
 # Default targets
-DEFAULT_TARGETS=("src" "tests" "helpers")
+DEFAULT_TARGETS=("src" "tests" "examples" "helpers")
 
 # Parse command line arguments
 if [ $# -eq 0 ]; then

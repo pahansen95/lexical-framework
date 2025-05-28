@@ -11,3 +11,22 @@ dev = [
     "pytest>=8.3.5",
     "ruff>=0.11.11",
 ]
+
+[tool.ruff]
+line-length = 120
+indent-width = 2
+
+[tool.ruff.format]
+indent-style = "space"
+quote-style = "double"
+
+[tool.ruff.lint]
+# Enable pycodestyle warnings (E) and errors (W), pyflakes (F)
+select = ["E", "W", "F"]
+# Ignore line length since we set it above
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+# Group imports like YAPF: standard library → third-party → local
+section-order = ["standard-library", "third-party", "local-folder"]
+combine-as-imports = true
