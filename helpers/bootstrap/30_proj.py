@@ -14,8 +14,8 @@ from typing import Any
 
 from .state import BootstrapState
 from .verify import verify_venv, verify_tool
-from ..tools import python as pytools
-from ..utils import configure_logging, run_command
+from helpers.tools import python as pytools
+from helpers.utils import configure_logging, run_command
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +143,59 @@ def verify_dependencies_accessible(name: str, venv_path: Path) -> dict[str, Any]
   return {"dependencies": {name: {"accessible": res.returncode == 0}}}
 
 
+def run(
+  state: BootstrapState,
+  *,
+  python_version: str | None = None,
+  skip_deps: bool = False,
+  skip_tools: bool = False,
+) -> BootstrapState:
+  """Execute the project environment layer."""
+
+  project_root = Path(state.project_root)
+  layer_results: dict[str, Any] = {}
+
+  layer_results.update(verify_project_structure(project_root))
+
+  venv_configs = {
+    "dev": {"groups": ["base", "dev", "build", "docs"], "tools": True},
+    "test": {"groups": ["base", "dev"], "tools": False},
+    "docs": {"groups": ["base", "docs"], "tools": False},
+  }
+
+  for name, cfg in venv_configs.items():
+    target = project_root / pytools.resolve_venv_path("default" if name == "dev" else name)
+    initial = verify_venv(target)
+    state.record_verification(f"venv_{name}", initial)
+    if initial["valid"]:
+      state.record_decision(f"venv_{name}", "reuse")
+    else:
+      venv_res = create_virtual_environment(project_root, name, python_version)
+      layer_results.setdefault("venvs", {}).update(venv_res)
+      state.record_decision(f"venv_{name}", "create" if venv_res[name]["created"] else "fail")
+      state.record_verification(f"venv_{name}", verify_venv(target))
+
+    if (target / "bin/python").exists():
+      if not skip_deps:
+        dep_res = install_dependencies(project_root, name, cfg["groups"])
+        layer_results.setdefault("dependencies", {}).update(dep_res["dependencies"])
+        dep_verify = verify_dependencies_accessible(name, target)
+        state.record_verification(f"deps_{name}", dep_verify)
+
+      if cfg["tools"] and not skip_tools:
+        tools_res = install_development_tools(target)
+        layer_results.setdefault("dev_tools", {}).update(tools_res["dev_tools"])
+        state.record_decision(f"dev_tools_{name}", "install")
+        state.record_verification(f"dev_tools_{name}", verify_dev_tools(target))
+      elif cfg["tools"]:
+        state.record_decision(f"dev_tools_{name}", "skip")
+
+  state.layer = 3
+  state.layers.append({"layer": 3, "name": "project_environment", "results": layer_results})
+
+  return state
+
+
 def main() -> None:
   """Setup project environment."""
   parser = argparse.ArgumentParser(description="Layer 3: Project Environment")
@@ -168,53 +221,8 @@ def main() -> None:
     input_state["project_root"] = str(Path.cwd())
 
   state = BootstrapState.from_dict(input_state)
-  project_root = Path(state.project_root)
   python_version = args.python or state.installed_tools.get("python", {}).get("version")
-
-  if not project_root.exists():
-    logger.error("Project root does not exist: %s", project_root)
-    sys.exit(1)
-
-  layer_results: dict[str, Any] = {}
-
-  layer_results.update(verify_project_structure(project_root))
-
-  venv_configs = {
-    "dev": {"groups": ["base", "dev", "build", "docs"], "tools": True},
-    "test": {"groups": ["base", "dev"], "tools": False},
-    "docs": {"groups": ["base", "docs"], "tools": False},
-  }
-
-  for name, cfg in venv_configs.items():
-    target = project_root / pytools.resolve_venv_path("default" if name == "dev" else name)
-    initial = verify_venv(target)
-    state.record_verification(f"venv_{name}", initial)
-    if initial["valid"]:
-      state.record_decision(f"venv_{name}", "reuse")
-    else:
-      venv_res = create_virtual_environment(project_root, name, python_version)
-      layer_results.setdefault("venvs", {}).update(venv_res)
-      state.record_decision(f"venv_{name}", "create" if venv_res[name]["created"] else "fail")
-      state.record_verification(f"venv_{name}", verify_venv(target))
-
-    if (target / "bin/python").exists():
-      if not args.skip_deps:
-        dep_res = install_dependencies(project_root, name, cfg["groups"])
-        layer_results.setdefault("dependencies", {}).update(dep_res["dependencies"])
-        dep_verify = verify_dependencies_accessible(name, target)
-        state.record_verification(f"deps_{name}", dep_verify)
-
-      if cfg["tools"] and not args.skip_tools:
-        tools_res = install_development_tools(target)
-        layer_results.setdefault("dev_tools", {}).update(tools_res["dev_tools"])
-        state.record_decision(f"dev_tools_{name}", "install")
-        state.record_verification(f"dev_tools_{name}", verify_dev_tools(target))
-      elif cfg["tools"]:
-        state.record_decision(f"dev_tools_{name}", "skip")
-
-  # Pass through previous layer data
-  state.layer = 3
-  state.layers.append({"layer": 3, "name": "project_environment", "results": layer_results})
+  state = run(state, python_version=python_version, skip_deps=args.skip_deps, skip_tools=args.skip_tools)
 
   # Output state to stdout
   json.dump(state.to_dict(), sys.stdout, indent=2)

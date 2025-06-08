@@ -30,14 +30,31 @@ class BootstrapState:
   decisions: Dict[str, str] = field(default_factory=dict)
   verifications: Dict[str, Any] = field(default_factory=dict)
 
+
   @classmethod
   def from_dict(cls, data: Dict[str, Any]) -> "BootstrapState":
-    """Create state from legacy dictionary representation."""
-    return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+    """Create state from dictionary representation."""
+    # Extract platform name if present
+    platform_name = data.pop("platform", None)
+
+    # Create state instance
+    state = cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+    # Recreate platform object if needed
+    if platform_name and not state.platform:
+      from .platform import get_platform_handler
+
+      state.platform = get_platform_handler()
+
+    return state
 
   def to_dict(self) -> Dict[str, Any]:
     """Convert state to a JSON serialisable dictionary."""
-    return asdict(self)
+    data = asdict(self)
+    # Convert platform to string representation
+    if self.platform:
+      data["platform"] = self.platform.name
+    return data
 
   def can_proceed(self) -> bool:
     """Return ``True`` if the bootstrap process should continue."""

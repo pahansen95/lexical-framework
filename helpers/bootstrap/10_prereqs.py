@@ -363,6 +363,30 @@ def verify_prerequisites() -> dict[str, Any]:
   return {"checks": check_prerequisites()}
 
 
+def run(state: BootstrapState, *, quick: bool = False) -> BootstrapState:
+  """Execute the prerequisites layer."""
+
+  layer_results = {
+    "shell": probe_shell_environment(),
+    "git": probe_git_installation(),
+    "python": probe_python_installations(),
+  }
+
+  if not quick:
+    layer_results["package_managers"] = probe_package_managers()
+    layer_results["dev_tools"] = probe_development_tools()
+
+  prerequisite_checks = check_prerequisites()
+  state.prerequisites_met = all(prerequisite_checks.values())
+  state.prerequisite_checks = prerequisite_checks
+  state.record_verification("prerequisites", verify_prerequisites())
+
+  state.layer = 1
+  state.layers.append({"layer": 1, "name": "prerequisites", "results": layer_results})
+
+  return state
+
+
 def main() -> None:
   """Probe prerequisites layer information."""
   parser = argparse.ArgumentParser(description="Layer 1: Prerequisites Probe")
@@ -388,27 +412,7 @@ def main() -> None:
     input_state["project_root"] = str(Path.cwd())
 
   state = BootstrapState.from_dict(input_state)
-
-  # Layer 1 operations
-  layer_results = {
-    "shell": probe_shell_environment(),
-    "git": probe_git_installation(),
-    "python": probe_python_installations(),
-  }
-
-  # Slower probes (optional)
-  if not args.quick:
-    layer_results["package_managers"] = probe_package_managers()
-    layer_results["dev_tools"] = probe_development_tools()
-
-  # Check prerequisites
-  prerequisite_checks = check_prerequisites()
-  state.prerequisites_met = all(prerequisite_checks.values())
-  state.prerequisite_checks = prerequisite_checks
-  state.record_verification("prerequisites", verify_prerequisites())
-
-  state.layer = 1
-  state.layers.append({"layer": 1, "name": "prerequisites", "results": layer_results})
+  state = run(state, quick=args.quick)
 
   # Output state to stdout
   json.dump(state.to_dict(), sys.stdout, indent=2)
@@ -418,7 +422,7 @@ def main() -> None:
     logger.info("Prerequisites layer probe complete - all requirements met")
   else:
     logger.warning("Prerequisites layer probe complete - missing requirements")
-    for check, passed in prerequisite_checks.items():
+    for check, passed in state.prerequisite_checks.items():
       if not passed:
         logger.warning(f"  Missing: {check}")
 

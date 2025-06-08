@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .state import BootstrapState
-from ..utils import configure_logging
+from helpers.utils import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +220,36 @@ def probe_system_resources() -> dict[str, Any]:
   return result
 
 
+def run(state: BootstrapState, *, skip_network: bool = False) -> BootstrapState:
+  """Execute the foundation layer."""
+
+  layer_results = {
+    "os": probe_os_info(),
+    "filesystem": probe_filesystem(),
+    "environment": probe_environment_variables(),
+    "resources": probe_system_resources(),
+  }
+
+  if not skip_network:
+    layer_results["network"] = probe_network_connectivity()
+
+  checks = {
+    "os_supported": layer_results["os"]["system"] in ["Linux", "Darwin", "Windows"],
+    "disk_space_ok": (layer_results["filesystem"]["disk_space_mb"] or 0) >= 500,
+    "can_write": layer_results["filesystem"]["cwd_writable"],
+    "network_ok": not skip_network and layer_results.get("network", {}).get("https_connectivity", False),
+  }
+
+  state.foundation_ready = all(checks.values())
+  state.foundation_checks = checks
+  state.record_verification("foundation", verify_foundation(checks))
+
+  state.layer = 0
+  state.layers.append({"layer": 0, "name": "foundation", "results": layer_results})
+
+  return state
+
+
 def main() -> None:
   """Probe foundation layer information."""
   parser = argparse.ArgumentParser(description="Layer 0: Foundation Probe")
@@ -245,34 +275,7 @@ def main() -> None:
     input_state["project_root"] = str(Path.cwd())
 
   state = BootstrapState.from_dict(input_state)
-
-  # Layer 0 operations
-  layer_results = {
-    "os": probe_os_info(),
-    "filesystem": probe_filesystem(),
-    "environment": probe_environment_variables(),
-    "resources": probe_system_resources(),
-  }
-
-  # Network probe (can be slow, so optional)
-  if not args.skip_network:
-    layer_results["network"] = probe_network_connectivity()
-
-  # Determine if environment is suitable for bootstrap
-  checks = {
-    "os_supported": layer_results["os"]["system"] in ["Linux", "Darwin", "Windows"],
-    "disk_space_ok": (layer_results["filesystem"]["disk_space_mb"] or 0) >= 500,
-    "can_write": layer_results["filesystem"]["cwd_writable"],
-    "network_ok": not args.skip_network and layer_results.get("network", {}).get("https_connectivity", False),
-  }
-
-  # Store readiness indicators as dynamic fields for compatibility
-  state.foundation_ready = all(checks.values())
-  state.foundation_checks = checks
-  state.record_verification("foundation", verify_foundation(checks))
-
-  state.layer = 0
-  state.layers.append({"layer": 0, "name": "foundation", "results": layer_results})
+  state = run(state, skip_network=args.skip_network)
 
   # Output state to stdout
   json.dump(state.to_dict(), sys.stdout, indent=2)
@@ -282,7 +285,7 @@ def main() -> None:
     logger.info("Foundation layer probe complete - environment suitable")
   else:
     logger.warning("Foundation layer probe complete - issues detected")
-    for check, passed in checks.items():
+    for check, passed in state.foundation_checks.items():
       if not passed:
         logger.warning(f"  Failed: {check}")
 

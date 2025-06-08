@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .state import BootstrapState
-from ..utils import configure_logging, run_command
+from helpers.utils import configure_logging, run_command
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +115,43 @@ def verify_helper_scripts(project_root: Path) -> dict[str, Any]:
   return result
 
 
+def run(
+  state: BootstrapState,
+  *,
+  skip_pre_commit: bool = False,
+  skip_ide: bool = False,
+) -> BootstrapState:
+  """Execute the developer experience layer."""
+
+  project_root = Path(state.project_root)
+  layer_results: dict[str, Any] = {}
+
+  if not skip_pre_commit:
+    pre_res = install_pre_commit_hooks(project_root)
+    state.record_decision("pre_commit", "install" if pre_res["pre_commit"]["installed"] else "skip")
+    layer_results.update(pre_res)
+    verify_res = verify_pre_commit_hooks(project_root)
+    state.record_verification("pre_commit", verify_res)
+    layer_results.update(verify_res)
+
+  if not skip_ide:
+    ide_res = configure_ide_settings(project_root)
+    state.record_decision("ide_settings", "configure")
+    layer_results.update(ide_res)
+    verify_res = verify_ide_settings(project_root)
+    state.record_verification("ide_settings", verify_res)
+    layer_results.update(verify_res)
+
+  verify_helpers = verify_helper_scripts(project_root)
+  state.record_verification("helpers", verify_helpers)
+  layer_results.update(verify_helpers)
+
+  state.layer = 4
+  state.layers.append({"layer": 4, "name": "developer_experience", "results": layer_results})
+
+  return state
+
+
 def main() -> None:
   """Configure developer experience components."""
   parser = argparse.ArgumentParser(description="Layer 4: Developer Experience")
@@ -140,39 +177,11 @@ def main() -> None:
     input_state["project_root"] = str(Path.cwd())
 
   state = BootstrapState.from_dict(input_state)
-
-  # Determine project root
-  project_root = Path(state.project_root)
-  if not project_root.exists():
-    logger.error("Project root does not exist: %s", project_root)
-    sys.exit(1)
-
-  # Layer 4 operations
-  layer_results: dict[str, Any] = {}
-
-  if not args.skip_pre_commit:
-    pre_res = install_pre_commit_hooks(project_root)
-    state.record_decision("pre_commit", "install" if pre_res["pre_commit"]["installed"] else "skip")
-    layer_results.update(pre_res)
-    verify_res = verify_pre_commit_hooks(project_root)
-    state.record_verification("pre_commit", verify_res)
-    layer_results.update(verify_res)
-
-  if not args.skip_ide:
-    ide_res = configure_ide_settings(project_root)
-    state.record_decision("ide_settings", "configure")
-    layer_results.update(ide_res)
-    verify_res = verify_ide_settings(project_root)
-    state.record_verification("ide_settings", verify_res)
-    layer_results.update(verify_res)
-
-  verify_helpers = verify_helper_scripts(project_root)
-  state.record_verification("helpers", verify_helpers)
-  layer_results.update(verify_helpers)
-
-  # Pass through previous layer data
-  state.layer = 4
-  state.layers.append({"layer": 4, "name": "developer_experience", "results": layer_results})
+  state = run(
+    state,
+    skip_pre_commit=args.skip_pre_commit,
+    skip_ide=args.skip_ide,
+  )
 
   # Output state to stdout
   json.dump(state.to_dict(), sys.stdout, indent=2)
