@@ -93,7 +93,216 @@ Use this process to inform what comes next. Favor automation & fast feedback to 
 
 ## Coding Conventions
 
-> Fill in as necessary
+Based on established patterns in the `lex` and `parse` modules, contributors should follow these conventions to maintain consistency and readability across the codebase.
+
+### Naming Standards
+
+**Classes**: Use PascalCase for all class names. Classes should represent concepts or entities.
+```python
+class TokenStream:      # ✓ Good
+class token_stream:     # ✗ Avoid
+```
+
+**Functions and Methods**: Use snake_case for all functions and methods. Names should be verb phrases that describe actions.
+```python
+def consume_token():    # ✓ Good
+def consumeToken():     # ✗ Avoid
+```
+
+**Constants**: Use UPPERCASE with underscores for module-level constants. Group related constants together.
+```python
+WHITESPACE = {"SPACE", "TAB"}     # ✓ Good
+LINE_BREAK = {"NEWLINE", "CRLF"}  # ✓ Good
+```
+
+**Private Members**: Prefix with single underscore for internal implementation details.
+```python
+def _consume_structural():   # Internal method
+self._cached_position = 0    # Internal state
+```
+
+**Module Singletons**: Use Capitalized names for factory instances or singleton objects.
+```python
+State = StateFactory()   # Factory instance
+token = TokenFactory()   # Decorator factory
+```
+
+### Type Annotations
+
+Type annotations are mandatory for all function signatures and class attributes. Use the typing module for complex types.
+
+```python
+def match(self, *types: str) -> bool:  # ✓ Required
+    ...
+
+def process(self, tokens: List[Token]) -> Optional[Node]:  # ✓ Clear types
+    ...
+
+## Avoid Any unless absolutely necessary
+def parse(self, data: Any) -> Any:  # ⚠️ Use specific types
+```
+
+### Documentation Standards
+
+**Module Docstrings**: Begin each module with a concise description of its purpose.
+```python
+"""
+Lexer Builder Framework
+
+A declarative framework for building lexical analyzers with stateful pattern 
+recognition and automatic lifecycle management.
+"""
+```
+
+**Class Docstrings**: Document the class purpose, key attributes, and usage patterns.
+```python
+class TokenStream:
+    """
+    Character stream with position tracking for lexical analysis.
+    
+    Provides efficient character-level access with automatic position
+    tracking, lookahead capabilities, and error reporting.
+    """
+```
+
+**Method Docstrings**: Use imperative mood. Document parameters only when non-obvious.
+```python
+def consume(self) -> Token:
+    """Consume token with automatic structural handling."""
+    ...
+
+def separated(self, parser_fn: Callable, delimiter: str) -> List:
+    """Parse delimited sequence."""
+    ...
+```
+
+### Code Organization
+
+**Section Headers**: Use comment blocks to separate major sections within modules.
+```python
+## ===== Core Token Infrastructure =====
+
+## ===== Pattern Matching System =====
+
+## ===== Parser Combinators =====
+```
+
+**Class Member Order**: Organize class members consistently:
+1. Class variables and constants
+2. `__init__` and initialization methods
+3. Properties
+4. Public methods (grouped by functionality)
+5. Private methods
+
+**Import Organization**: Group imports by category with clear separation.
+```python
+from dataclasses import dataclass, field
+from typing import Any, List, Optional
+
+from .state import BootstrapState
+from .platform import Platform
+
+import logging
+```
+
+### Error Handling
+
+**Custom Exceptions**: Create domain-specific exceptions with rich context.
+```python
+class ParseError(Exception):
+    """Raised when parsing fails."""
+    pass
+
+class LexError(Exception):
+    """Enhanced exception for lexical analysis errors with position tracking."""
+    def __init__(self, message: str, position: Optional[Position] = None):
+        ...
+```
+
+**Error Messages**: Provide actionable, context-rich error messages.
+```python
+## ✓ Good - provides context and location
+raise ParseError(f"Expected {types} but got {token.type} at line {token.line}")
+
+## ✗ Avoid - too generic
+raise ParseError("Invalid token")
+```
+
+### Design Patterns
+
+**Dataclasses**: Use dataclasses for pure data structures with minimal behavior.
+```python
+@dataclass
+class Token:
+    type: str
+    value: Any
+    line: int
+    column: int
+```
+
+**Context Managers**: Use context managers for resource lifecycle and state management.
+```python
+@contextmanager
+def structural_context(self, rules: Type[StructuralRules]):
+    """Temporarily change structural handling."""
+    self.structural_stack.append(rules)
+    try:
+        yield
+    finally:
+        self.structural_stack.pop()
+```
+
+**Decorators**: Use decorators for cross-cutting concerns and declarative syntax.
+```python
+@rule(node="expression", flatten=True)
+def parse_expression(self):
+    ...
+```
+
+### Performance Considerations
+
+**Caching**: Cache expensive computations with clear invalidation logic.
+```python
+## Cache semantic position for efficient lookahead
+if self._cached_from_pos == current_pos:
+    return self._cached_result
+```
+
+**Early Returns**: Use guard clauses to reduce nesting and improve readability.
+```python
+def match(self, text: str) -> bool:
+    if self.at_end():
+        return False
+    
+    if not text:
+        return True
+    
+    # Main logic here
+```
+
+### Writing Tests
+
+**Test Organization**: Mirror source structure in test directory. Use descriptive test names.
+```python
+def test_verify_tool_python():     # ✓ Describes what is tested
+def test_1():                      # ✗ Non-descriptive
+```
+
+**Assertions**: Use specific assertions with clear failure messages.
+```python
+assert res["installed"], "Python should be installed"  # ✓ Good
+assert res["installed"]  # ⚠️ Less helpful on failure
+```
+
+### General Guidelines
+
+1. **Prefer Composition**: Build complex behavior from simple, composable parts
+2. **Fail Fast**: Validate inputs early and raise clear exceptions
+3. **Minimize State**: Prefer functional approaches where practical
+4. **Document Intent**: Use names and comments to explain "why", not just "what"
+5. **Consistent Abstraction**: Keep abstraction levels consistent within a function
+
+These conventions ensure the codebase remains maintainable, readable, and consistent as it evolves.
 
 ## Environment & Tooling
 
