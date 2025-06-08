@@ -4,33 +4,12 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$script_dir/.." && pwd)"
 
-usage() {
-  echo "Usage: $(basename "$0") TOOL [ARGS...]" >&2
-  local tools
-  tools=$(cd "$root/helpers/tools" && ls *.py 2>/dev/null | grep -v '^__init__\.py$' | sed 's/\.py$//' | tr '\n' ' ')
-  echo "Available tools: $tools" >&2
-  exit 1
-}
-
-case ${1-} in
-  ""|--*) usage ;;
-esac
-
-tool=$1
-shift
-
-module_file="$root/helpers/tools/$tool.py"
-if [ ! -f "$module_file" ]; then
-  echo "Unknown tool: $tool" >&2
-  exit 1
-fi
-
 venv_name="dev"
-while IFS= read -r line; do
-  case "$line" in
-    VENV_WANT*) venv_name=$(printf "%s" "$line" | cut -d'"' -f2); break ;;
-  esac
-done < "$module_file"
+first_arg=${1-}
+
+if [ -n "$first_arg" ] && [ -d "$root/.venv/$first_arg" ]; then
+  venv_name=$first_arg
+fi
 
 if [ "$venv_name" = "dev" ]; then
   venv_path="$root/.venv"
@@ -48,4 +27,4 @@ if [ -z "${VIRTUAL_ENV-}" ]; then
 fi
 
 export PYTHONPATH="$root${PYTHONPATH+:$PYTHONPATH}"
-exec python -m "helpers.tools.$tool" "$@"
+exec python -m helpers.tools "$@"

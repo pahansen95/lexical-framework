@@ -12,8 +12,8 @@ from pathlib import Path
 import shutil
 from typing import Any
 
-from .state import BootstrapState
-from .verify import verify_venv, verify_tool
+from helpers.bootstrap.state import BootstrapState
+from helpers.bootstrap.verify import verify_venv, verify_tool
 from helpers.tools import python as pytools
 from helpers.utils import configure_logging, run_command
 
@@ -158,8 +158,8 @@ def run(
   layer_results.update(verify_project_structure(project_root))
 
   venv_configs = {
-    "dev": {"groups": ["base", "dev", "build", "docs"], "tools": True},
-    "test": {"groups": ["base", "dev"], "tools": False},
+    "dev": {"groups": ["base", "dev", "test", "build", "docs"], "tools": True},
+    "test": {"groups": ["base", "test"], "tools": False},
     "docs": {"groups": ["base", "docs"], "tools": False},
   }
 

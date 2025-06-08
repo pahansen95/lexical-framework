@@ -3,24 +3,20 @@
 from __future__ import annotations
 
 import argparse
+from helpers.utils import logger, run_command
+from helpers.tools import tool, SubParser
 
 VENV_WANT = "test"
 
-from ..utils import add_common_args, configure_logging, logger, run_command, setup_working_directory
+
+def run(args: argparse.Namespace) -> None:
+  logger.debug("extra args: %s", args.extra)
+  run_command(["pytest", *args.extra])
 
 
-def main(argv: list[str] | None = None) -> None:
-  parser = argparse.ArgumentParser(prog="test")
-  add_common_args(parser)
+@tool("test")
+def register(subparsers: SubParser) -> None:
+  parser = subparsers.add_parser("test", help="Run tests")
   parser.add_argument("extra", nargs=argparse.REMAINDER, help="Extra args for pytest")
-  args = parser.parse_args(argv)
+  parser.set_defaults(func=run)
 
-  configure_logging(args.verbose, args.log_file)
-
-  with setup_working_directory(args):
-    logger.debug("extra args: %s", args.extra)
-    run_command(["pytest", *args.extra])
-
-
-if __name__ == "__main__":
-  main()

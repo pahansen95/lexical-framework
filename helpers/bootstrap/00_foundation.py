@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .state import BootstrapState
+from helpers.bootstrap.state import BootstrapState
 from helpers.utils import configure_logging
 
 logger = logging.getLogger(__name__)

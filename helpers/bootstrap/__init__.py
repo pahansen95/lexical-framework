@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from .state import BootstrapState
-from .platform import Platform, get_platform_handler
+from helpers.bootstrap.state import BootstrapState
+from helpers.bootstrap.platform import Platform, get_platform_handler
 
 __version__ = "1.0.0"
 

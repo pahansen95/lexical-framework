@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
 
-from .platform import Platform
+from helpers.bootstrap.platform import Platform
 
 import logging
 
@@ -30,7 +30,6 @@ class BootstrapState:
   decisions: Dict[str, str] = field(default_factory=dict)
   verifications: Dict[str, Any] = field(default_factory=dict)
 
-
   @classmethod
   def from_dict(cls, data: Dict[str, Any]) -> "BootstrapState":
     """Create state from dictionary representation."""
@@ -42,7 +41,7 @@ class BootstrapState:
 
     # Recreate platform object if needed
     if platform_name and not state.platform:
-      from .platform import get_platform_handler
+      from helpers.bootstrap.platform import get_platform_handler
 
       state.platform = get_platform_handler()
 

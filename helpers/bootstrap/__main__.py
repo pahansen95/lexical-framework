@@ -11,9 +11,9 @@ from pathlib import Path
 import importlib
 
 from helpers.utils import configure_logging, find_project_root
-from . import LAYERS
-from .platform import get_platform_handler
-from .state import BootstrapState
+from helpers.bootstrap import LAYERS
+from helpers.bootstrap.platform import get_platform_handler
+from helpers.bootstrap.state import BootstrapState
 
 logger = logging.getLogger(__name__)
 

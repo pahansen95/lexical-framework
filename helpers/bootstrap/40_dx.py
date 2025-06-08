@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .state import BootstrapState
+from helpers.bootstrap.state import BootstrapState
 from helpers.utils import configure_logging, run_command
 
 logger = logging.getLogger(__name__)

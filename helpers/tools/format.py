@@ -1,26 +1,36 @@
-"""Format code with Ruff."""
+"""Format code with Ruff.
+
+Use ``--check`` to only verify formatting without modifying files.
+"""
 
 from __future__ import annotations
 
 import argparse
+from helpers.utils import logger, run_command
+from helpers.tools import tool, SubParser
 
 VENV_WANT = "dev"
 
-from ..utils import add_common_args, configure_logging, logger, run_command, setup_working_directory
+
+def run(args: argparse.Namespace) -> None:
+  logger.debug("paths: %s", args.paths)
+
+  cmd = ["ruff", "format"]
+  if args.check:
+    cmd.append("--check")
+
+  cmd.extend(args.paths)
+  run_command(cmd)
 
 
-def main(argv: list[str] | None = None) -> None:
-  parser = argparse.ArgumentParser(prog="format")
-  add_common_args(parser)
+@tool("format")
+def register(subparsers: SubParser) -> None:
+  parser = subparsers.add_parser("format", help="Format code with Ruff")
+  parser.add_argument(
+    "--check",
+    action="store_true",
+    help="Only verify formatting, do not modify files",
+  )
   parser.add_argument("paths", nargs=argparse.REMAINDER, help="Paths to format")
-  args = parser.parse_args(argv)
+  parser.set_defaults(func=run)
 
-  configure_logging(args.verbose, args.log_file)
-
-  with setup_working_directory(args):
-    logger.debug("paths: %s", args.paths)
-    run_command(["ruff", "format", *args.paths])
-
-
-if __name__ == "__main__":
-  main()

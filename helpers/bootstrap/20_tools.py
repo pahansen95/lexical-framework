@@ -10,9 +10,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .state import BootstrapState
-from .platform import get_platform_handler
-from .verify import verify_tool
+from helpers.bootstrap.state import BootstrapState
+from helpers.bootstrap.platform import get_platform_handler
+from helpers.bootstrap.verify import verify_tool
 from helpers.utils import configure_logging, run_command, check_command_exists
 
 logger = logging.getLogger(__name__)
