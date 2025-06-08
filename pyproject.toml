@@ -3,13 +3,26 @@ name = "lexical-framework"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = []
+description = "A framework for quickly building lexical analysis tools"
+readme = "README.md"
+license = "MIT"
 
 [dependency-groups]
+build = [
+    "build>=1.2.2.post1",
+]
 dev = [
     "mypy>=1.15.0",
     "pre-commit>=4.2.0",
-    "pytest>=8.3.5",
     "ruff>=0.11.11",
+]
+test = [
+    "pytest>=8.3.5",
+    "pytest-cov>=6.1.1",
+    "pytest-mock>=3.14.1",
+]
+docs = [
+    "mkdocs>=1.5.3",
 ]
 
 [tool.ruff]
@@ -21,12 +34,34 @@ indent-style = "space"
 quote-style = "double"
 
 [tool.ruff.lint]
-# Enable pycodestyle warnings (E) and errors (W), pyflakes (F)
 select = ["E", "W", "F"]
-# Ignore line length since we set it above
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-# Group imports like YAPF: standard library → third-party → local
 section-order = ["standard-library", "third-party", "local-folder"]
 combine-as-imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--verbose",
+    "--tb=short",
+    "--strict-markers",
+    "--disable-warnings",
+    "--cov=src/py_project_tmpl",
+    "--cov-report=term-missing",
+    "--cov-report=html:htmlcov",
+    "--cov-fail-under=85"
+]
+markers = [
+    "slow: marks tests as slow",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests"
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning"
+]

@@ -1,0 +1,3 @@
+site_name: My Tool
+nav:
+  - Home: index.md

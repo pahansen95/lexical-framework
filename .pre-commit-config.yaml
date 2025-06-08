@@ -1,14 +1,6 @@
-# Pre-commit hooks configuration
-# See https://pre-commit.com for more information
-
 repos:
-  # Local hooks that call helper scripts
-  - repo: local
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.2.0
     hooks:
-      - id: enforce-style
-        name: Enforce Python Style
-        entry: bash helpers/enforce-style.sh
-        language: system
-        types: [python]
-        pass_filenames: true
-        verbose: true
+      - id: ruff-format
+      - id: ruff

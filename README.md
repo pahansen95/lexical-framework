@@ -1,2 +1,3 @@
 # lexical-framework
-Framework for quickly building Lexical Analysis Tools
+
+A framework for quickly building Lexical Analysis Tools
