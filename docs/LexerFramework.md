@@ -27,7 +27,7 @@ The framework consists of five primary architectural layers:
 **State Management Layer**
 - Typed state containers (`State.stack()`, `State.counter()`, `State.set()`)
 - Automatic state reset between lexical analyses
-- Observable state for debugging
+- Clear state tracking for debugging
 
 **Stream Processing Layer**
 - `TokenStream` provides position-aware character access
@@ -36,7 +36,7 @@ The framework consists of five primary architectural layers:
 - Enhanced error reporting with source context
 
 **Lifecycle Management Layer**
-- `TokenizationContext` manages lexer lifecycle through context managers
+- `LexingContext` manages lexer lifecycle through context managers
 - Automatic final token generation
 - Error enhancement with state information
 - Guaranteed cleanup semantics
@@ -163,8 +163,8 @@ stream.advance(5)  # Consume multiple characters
 stream.match('keyword')  # Try to match string
 stream.match_while(str.isdigit)  # Match while condition true
 stream.match_word()  # Match identifier pattern
-stream.at_line_start  # Position check
-stream.at_end()  # EOF check
+stream.at_line_start  # Position check (property)
+stream.at_end  # EOF check (property)
 stream.error('message')  # Raise error with position
 ```
 
@@ -201,7 +201,7 @@ class TemplateLexer(Lexer):
     def TEXT(self, stream: TokenStream):
         # Capture until template marker
         start = stream.pos
-        while not stream.at_end() and not stream.peek(2) == '{{':
+        while not stream.at_end and not stream.peek(2) == '{{':
             stream.advance()
         return stream.pos > start
     
@@ -264,7 +264,7 @@ The framework provides comprehensive error handling with automatic position trac
 # Automatic error enhancement
 try:
     tokens = list(lexer.lex(source))
-except TokenError as e:
+except LexError as e:
     print(e)
     # Output: Unexpected character '}' at line 5, column 12
     # data = {1, 2, 3}
@@ -275,7 +275,7 @@ Context managers automatically enhance errors with state information:
 
 ```python
 # Unclosed delimiters reported
-TokenError: Unexpected end of input (unclosed brackets: 2, unclosed parentheses: 1)
+LexError: Unexpected end of input (unclosed brackets: 2, unclosed parentheses: 1)
 ```
 
 ## Performance Considerations
@@ -297,9 +297,9 @@ State containers provide efficient operations:
 ### Memory Management
 
 The framework minimizes allocations through:
-- Token object pooling (when applicable)
 - Streaming processing without full tokenization
 - Efficient position tracking
+- Reuse of state containers between lexing operations
 
 ## Best Practices
 
@@ -384,25 +384,12 @@ class UnicodePropertyMatcher(Matcher):
         pass
 ```
 
-### Observable State
-
-Enable state observation for debugging:
-
-```python
-indent_stack = State.stack([0], observable=True)
-
-def trace_indents(operation, value, stack):
-    print(f"Indent {operation}: {value} -> {stack}")
-
-indent_stack.observe(trace_indents)
-```
-
 ### Context Managers
 
 Customize lifecycle behavior through context manager extension:
 
 ```python
-class CustomContext(TokenizationContext):
+class CustomContext(LexingContext):
     def __enter__(self):
         # Additional setup
         return super().__enter__()
@@ -411,6 +398,15 @@ class CustomContext(TokenizationContext):
         # Additional cleanup
         return super().__exit__(exc_type, exc_val, exc_tb)
 ```
+
+## Future Enhancements
+
+The framework is designed for extensibility. Potential future additions include:
+
+- Observable state patterns for advanced debugging
+- Token object pooling for high-performance scenarios
+- Parallel lexing support for large files
+- Incremental lexing for interactive editors
 
 ## Conclusion
 

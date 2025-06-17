@@ -60,6 +60,8 @@ The Parser class provides foundational parsing operations enhanced with structur
 - `choice()` - Ordered alternatives
 - `many()/some()` - Repetition patterns
 - `separated()` - Delimited sequences
+- `repeats()` - Bounded repetition with min/max counts
+- `optional()` - Zero or one occurrence
 
 ### Semantic Token Cache
 
@@ -69,7 +71,7 @@ The framework employs position-based caching for semantic token matching, elimin
 - Single position pair storage
 - Invalidation on stream modification
 - Transparent operation
-- 80%+ hit rate in typical grammars
+- Significant performance improvement for grammars with heavy lookahead
 
 ### Debug Infrastructure
 
@@ -99,7 +101,7 @@ Parser components compose naturally:
 
 The framework balances automation with efficiency:
 - Cached lookahead avoids repeated scanning
-- Minimal object allocation during parsing
+- Efficient structural token handling
 - Lazy structural token consumption
 - Optional debug overhead
 
@@ -144,12 +146,34 @@ def string_literal(self):
     return self.quoted_content()
 ```
 
+### Rule Decorators
+
+The `@rule` decorator supports several options:
+
+```python
+@rule(node="custom_name")  # Custom node type name
+def parse_item(self):
+    pass
+
+@rule(flatten=True)  # Unwrap single child nodes
+def wrapper_rule(self):
+    pass
+
+@rule(capture=False)  # Don't capture tokens/nodes
+def skip_rule(self):
+    pass
+
+@rule(structural=CustomRules)  # Custom structural rules
+def special_context(self):
+    pass
+```
+
 ## Performance Characteristics
 
 ### Token Stream Operations
 - O(1) peek and consume
 - O(1) position checkpoint/restore
-- O(n) structural skip (cached)
+- O(n) structural skip where n is number of structural tokens
 
 ### Memory Usage
 - Linear with token count
@@ -158,8 +182,8 @@ def string_literal(self):
 
 ### Parsing Speed
 - Competitive with hand-written parsers
-- Cache reduces lookahead overhead
-- Debug mode adds ~20% overhead
+- Cache effectiveness depends on grammar lookahead patterns
+- Debug mode adds overhead proportional to rule depth
 
 ## Extension Points
 
@@ -218,7 +242,7 @@ Domain-specific languages benefiting from:
 - Explicit backtracking
 
 ### Performance Boundaries
-- Not suitable for extremely large files
+- Not suitable for extremely large files without streaming
 - Memory-bound by token storage
 - Single-threaded execution
 
@@ -230,10 +254,12 @@ Domain-specific languages benefiting from:
 ## Future Considerations
 
 ### Potential Enhancements
-- Streaming token support
+- Streaming token support for large files
 - Parallel parsing exploration
 - Grammar analysis tools
 - Performance profiling integration
+- Automatic left recursion elimination
+- Built-in precedence handling
 
 ### Architectural Evolution
 - Plugin system for extensions
