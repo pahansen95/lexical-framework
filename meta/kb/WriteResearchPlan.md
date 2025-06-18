@@ -1,0 +1,20 @@
+Let's conduct research to learn more about...
+
+> Insert Topic Description Here...
+
+We'll use a Deep Research AI Agent which will conduct a comprehensive internet search for us & then present it's findings. Our research plan should specify:
+
+- What are we researching & why? State the Hypotheses and/or general context driving us to conduct research.
+- What specific knowledge gaps do we want to close? What are our known knowns & known unknowns?
+- What knowledge vectors should the research be conducted along?
+- What should the scope of the research be, both breadth and depth?
+- Include any prescriptive directives or instructions for the agent to follow.
+
+Finally, detail how the final research artifact (a report document) should be presented:
+
+- target audience
+- formatting & structural layout
+- prose & tone
+- semantic organization & granularity
+
+Write the plan into an interactive artifact or canvas. Think about this very hard. Before creating the plan, talk through your initial thoughts. After writing the plan, review it & identify any aspects you'd like to improve or refine. Proceed to revising the plan if possible.
