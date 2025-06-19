@@ -1,5 +1,5 @@
 
-**Meta-Prompt**: Fill in the prompt template below by replacing the block quotes with the information requested. The generated prompt will then be used elsewhere to craft a Research Plan.
+**Meta-Prompt**: Fill in the prompt template below by replacing the block quotes with the information requested. The generated prompt will then be used elsewhere to craft a Research Plan. If possible, conduct some preliminary internet searches to better inform your pre-planning.
 
 <!-- Template Start -->
 
@@ -36,6 +36,6 @@ Write the plan into an interactive artifact or canvas. Think about this very har
 
 ## Additional Context
 
-> Include anything relevant to the research such as prior research or baseline assumptions
+> Include anything relevant to the research such as prior research or baseline assumptions.
 
 <!-- Template End -->
