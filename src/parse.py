@@ -7,7 +7,7 @@ that emit immutable syntax trees through an integrated builder pattern.
 
 from typing import List, Optional, Callable, Any
 from contextlib import contextmanager
-from tree import TreeBuilder, NodeView
+from tree import TreeBuilder, SyntaxTree, NodeView
 
 
 class ParseError(Exception):
@@ -71,6 +71,8 @@ class Parser:
     self.builder = TreeBuilder()
     self.structural_tokens = {"WHITESPACE", "COMMENT", "NEWLINE"}
     self.skip_structural = False
+    # Control tokens that shouldn't appear in syntax tree
+    self.control_tokens = {"EOF", "BOF"}
 
   # ===== Token Operations =====
 
@@ -80,7 +82,9 @@ class Parser:
       self._skip_structural_tokens()
 
     token = self.tokens.consume()
-    self.builder.add_token(token)
+    # Only add content tokens to syntax tree
+    if self._is_syntax_token(token):
+      self.builder.add_token(token)
     return token
 
   def expect(self, *types: str):
@@ -89,7 +93,9 @@ class Parser:
       self._skip_structural_tokens()
 
     token = self.tokens.expect(*types)
-    self.builder.add_token(token)
+    # Only add content tokens to syntax tree
+    if self._is_syntax_token(token):
+      self.builder.add_token(token)
     return token
 
   def match(self, *types: str) -> bool:
@@ -116,6 +122,58 @@ class Parser:
     """Skip over structural tokens"""
     while self.tokens.match(*self.structural_tokens):
       self.tokens.consume()
+
+  def _is_syntax_token(self, token) -> bool:
+    """Check if token should be part of syntax tree"""
+    return token.type not in self.control_tokens
+
+  # ===== Parser Entry Point =====
+
+  def parse(self) -> SyntaxTree:
+    """
+    Parse tokens into syntax tree.
+
+    Subclasses should override parse_root() to define grammar.
+    This method handles EOF verification and tree building.
+    """
+    try:
+      # Parse using grammar root
+      self.parse_root()
+
+      # Verify complete consumption
+      if not self.match("EOF"):
+        unexpected = self.peek()
+        if unexpected:
+          raise ParseError(
+            f"Unexpected {unexpected.type} '{unexpected.value}' at line {unexpected.line}, column {unexpected.column}"
+          )
+        else:
+          raise ParseError("Unexpected content at end of input")
+
+      # Build and return tree
+      frozen = self.builder.build()
+      return SyntaxTree(frozen)
+
+    except ParseError:
+      # Re-raise parse errors with original context
+      raise
+    except Exception as e:
+      # Wrap other errors with parse context
+      token = self.peek()
+      if token:
+        raise ParseError(f"Parse failed at line {token.line}, column {token.column}: {str(e)}") from e
+      else:
+        raise ParseError(f"Parse failed: {str(e)}") from e
+
+  def parse_root(self):
+    """
+    Parse grammar root. Override in subclasses.
+
+    Example:
+        def parse_root(self):
+            self.expression()
+    """
+    raise NotImplementedError("Subclasses must implement parse_root()")
 
   # ===== Parser Combinators =====
 

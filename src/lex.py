@@ -125,22 +125,15 @@ class PatternBuilder:
 
   @staticmethod
   def method(fn: Callable) -> Pattern:
-    def matcher(pos: Position) -> Optional[Match]:
-      start_pos = pos.pos
-      start_line = pos.line
-      start_col = pos.column
-
-      if fn(pos):
-        length = pos.pos - start_pos
-        value = pos.text[start_pos : pos.pos]
-        return Match(value, length)
-      else:
-        pos.pos = start_pos
-        pos.line = start_line
-        pos.column = start_col
-        return None
-
-    return Pattern(name=fn.__name__, matcher=matcher, **getattr(fn, "_pattern_kwargs", {}))
+    """Create pattern from method - requires binding at runtime"""
+    # Mark this as a method pattern that needs instance binding
+    pattern = Pattern(
+      name=fn.__name__,
+      matcher=fn,  # Store unbound method
+      **getattr(fn, "_pattern_kwargs", {}),
+    )
+    pattern._method_pattern = True
+    return pattern
 
 
 pattern = PatternBuilder()
@@ -231,6 +224,7 @@ class Lexer:
     cls._patterns.sort(key=lambda p: p.priority, reverse=True)
 
   def __init__(self):
+    # Copy state templates
     for name, template in self._states.items():
       state_copy = type(template)(template.value)
       setattr(self, name, state_copy)
@@ -257,7 +251,14 @@ class Lexer:
 
   def _next_token(self, pos: Position) -> Optional[Token]:
     """Find and consume next token"""
-    for pattern in self._patterns:
+    # Check if at end before processing patterns
+    if pos.at_end:
+      return None
+
+    # Use bound patterns if available (for instance methods)
+    patterns = getattr(self, "_bound_patterns", self._patterns)
+
+    for pattern in patterns:
       if pattern.at_line_start and not pos.at_line_start:
         continue
 

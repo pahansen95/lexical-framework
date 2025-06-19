@@ -1,21 +1,17 @@
 """
-MiniLang - A Comprehensive Example of the Lexical Framework
+MiniLang - Comprehensive Example using Frozen Tree Framework
 
-This example demonstrates advanced features of both the lexer and parser frameworks:
-- Stateful lexing with indentation tracking
-- Complex token patterns (strings with escapes, multi-line comments)
-- Conditional patterns based on lexer state
-- Full recursive descent parser with all combinators
-- CST to AST transformation using visitors
-- Error handling and position tracking
+Demonstrates advanced features including stateful lexing with indentation,
+complex token patterns, full recursive descent parsing, and CST to AST
+transformation using immutable syntax trees.
 """
 
 from typing import List, Optional, Union
 from dataclasses import dataclass
 
-# Import from framework modules
-from lex import Lexer, Token, pattern, token, Counter, Stack, State, LexError, Position
-from parse import Parser, Node, rule, Visitor, ParseError
+from lex import Lexer, Token, pattern, token, Stack, State, LexError, Position
+from parse import Parser, rule, Visitor, ParseError
+from tree import NodeView
 
 
 # ===== AST Node Definitions =====
@@ -23,7 +19,7 @@ from parse import Parser, Node, rule, Visitor, ParseError
 
 @dataclass
 class ASTNode:
-  """Base class for AST nodes."""
+  """Base class for AST nodes"""
 
   line: int
   column: int
@@ -129,16 +125,14 @@ class MiniLangLexer(Lexer):
   - Keywords and operators
   - Indentation-based blocks
   - String literals with escape sequences
-  - Single and multi-line comments
-  - Stateful pattern matching
+  - Comments
   """
 
   # State management
   indent_stack = Stack()  # Track indentation levels
   string_delimiter = State("")  # Track current string delimiter
-  paren_depth = Counter(0)  # Track parenthesis nesting
 
-  # Keywords (high priority to beat identifiers)
+  # Keywords (high priority)
   VAR = pattern.literal("var", priority=10)
   IF = pattern.literal("if", priority=10)
   ELSE = pattern.literal("else", priority=10)
@@ -151,7 +145,7 @@ class MiniLangLexer(Lexer):
   OR = pattern.literal("or", priority=10)
   NOT = pattern.literal("not", priority=10)
 
-  # Operators and punctuation
+  # Operators
   PLUS = pattern.literal("+")
   MINUS = pattern.literal("-")
   TIMES = pattern.literal("*")
@@ -179,37 +173,34 @@ class MiniLangLexer(Lexer):
   # Comments (skip)
   COMMENT = pattern.regex(r"#[^\n]*", skip=True)
 
-  # Newlines and whitespace need special handling for indentation
+  # Newlines need special handling for indentation
   NEWLINE = pattern.literal("\n")
 
-  # String literals using method pattern for complex handling
+  # String literals with escape sequences
   @token(priority=7)
-  def STRING(self, pos: "Position") -> bool:
-    """Match string literals with escape sequence handling."""
-    # Check for string delimiter
+  def STRING(self, pos: Position) -> bool:
+    """Match string literals with escape handling"""
     if pos.peek() not in ['"', "'"]:
       return False
 
     delimiter = pos.peek()
     pos.advance()  # Skip opening delimiter
 
-    # Track string delimiter in state
+    # Track delimiter
     self.string_delimiter.set(delimiter)
 
-    # Accumulate string content
+    # Accumulate string
     escaped = False
     while not pos.at_end:
       char = pos.peek()
 
       if escaped:
-        # Handle escape sequences
         escaped = False
         pos.advance()
       elif char == "\\":
         escaped = True
         pos.advance()
       elif char == delimiter:
-        # Found closing delimiter
         pos.advance()
         self.string_delimiter.reset()
         return True
@@ -219,102 +210,79 @@ class MiniLangLexer(Lexer):
       else:
         pos.advance()
 
-    # Reset state and fail
+    # Reset state on failure
     self.string_delimiter.reset()
-    return False
-
-  # Multi-line comments using method pattern
-  @token(priority=8, skip=True)
-  def BLOCK_COMMENT(self, pos: "Position") -> bool:
-    """Match multi-line comments /* ... */"""
-    if not (pos.peek() == "/" and pos.peek(1) == "*"):
-      return False
-
-    pos.advance(2)  # Skip /*
-
-    # Find closing */
-    while not pos.at_end:
-      if pos.peek() == "*" and pos.peek(1) == "/":
-        pos.advance(2)
-        return True
-      pos.advance()
-
     return False
 
   # Indentation handling
   @token(at_line_start=True, priority=15)
-  def INDENT(self, pos: "Position") -> bool:
-    """Match increased indentation at line start."""
+  def INDENT(self, pos: Position) -> bool:
+    """Match increased indentation"""
     if pos.at_end or not pos.at_line_start:
       return False
 
-    # Skip blank lines
+    # Count spaces
     start = pos.pos
     while pos.peek() and pos.peek() in " \t":
       pos.advance()
 
-    # If line is empty or comment, reset and skip
+    # Skip blank lines
     if pos.at_end or pos.peek() in "\n#":
       pos.pos = start
       return False
 
-    # Calculate indentation level
+    # Check indentation level
     indent_level = pos.pos - start
     current_indent = self.indent_stack.current or 0
 
     if indent_level > current_indent:
-      # Increased indentation
       self.indent_stack.push(indent_level)
       return True
     else:
-      # No increase, reset position
       pos.pos = start
       return False
 
   @token(at_line_start=True, priority=14)
-  def DEDENT(self, pos: "Position") -> bool:
-    """Match decreased indentation at line start."""
+  def DEDENT(self, pos: Position) -> bool:
+    """Match decreased indentation"""
     if pos.at_end or not pos.at_line_start:
       return False
 
-    # Skip blank lines
+    # Count spaces
     start = pos.pos
     while pos.peek() and pos.peek() in " \t":
       pos.advance()
 
-    # If line is empty or comment, reset and skip
+    # Skip blank lines
     if pos.at_end or pos.peek() in "\n#":
       pos.pos = start
       return False
 
-    # Calculate indentation level
+    # Check indentation level
     indent_level = pos.pos - start
     current_indent = self.indent_stack.current or 0
 
     if indent_level < current_indent:
-      # Find matching indentation level
+      # Find matching level
       while self.indent_stack.depth > 0 and self.indent_stack.current > indent_level:
         self.indent_stack.pop()
       pos.pos = start  # Don't consume whitespace
       return True
     else:
-      # No dedent
       pos.pos = start
       return False
 
-  # Regular whitespace (skip, but not at line start)
-  @token(skip=True, when=lambda self: not self._at_line_start)
-  def WHITESPACE(self, pos: "Position") -> bool:
-    """Skip non-significant whitespace."""
+  # Whitespace (skip except at line start)
+  @token(skip=True)
+  def WHITESPACE(self, pos: Position) -> bool:
+    """Skip non-significant whitespace"""
+    if pos.at_line_start:
+      return False
+
     if pos.peek() in " \t":
       while pos.peek() in " \t":
         pos.advance()
       return True
-    return False
-
-  def _at_line_start(self) -> bool:
-    """Helper to check if we're at line start."""
-    # This would need access to position context
     return False
 
 
@@ -322,44 +290,36 @@ class MiniLangLexer(Lexer):
 
 
 class MiniLangParser(Parser):
-  """
-  Parser for MiniLang with full recursive descent parsing.
-  Demonstrates all parser combinators and CST construction.
-  """
+  """Parser for MiniLang with frozen tree construction"""
 
   def __init__(self, tokens: List[Token]):
     super().__init__(tokens)
-    # Configure structural token handling
-    self.skip_structural = True
-    self.structural_tokens = {"WHITESPACE", "COMMENT", "BLOCK_COMMENT"}
+    # Keep structural tokens for proper CST
+    self.skip_structural = False
+    self.structural_tokens = {"WHITESPACE", "COMMENT"}
 
   # ===== Program Structure =====
 
   @rule
   def program(self):
-    """Parse complete program."""
-    statements = []
-
+    """Parse complete program"""
     # Skip initial newlines
     while self.match("NEWLINE"):
       self.consume()
 
-    # Parse statements until EOF
+    # Parse statements
     while not self.match("EOF"):
-      stmt = self.statement()
-      statements.append(stmt)
+      self.statement()
 
-      # Consume statement-ending newlines
+      # Handle newlines
       while self.match("NEWLINE"):
         self.consume()
-
-    return statements
 
   # ===== Statements =====
 
   def statement(self):
-    """Parse any statement."""
-    return self.choice(
+    """Parse any statement"""
+    self.choice(
       self.var_declaration,
       self.assignment_statement,
       self.if_statement,
@@ -371,365 +331,551 @@ class MiniLangParser(Parser):
 
   @rule
   def var_declaration(self):
-    """Parse variable declaration: var name = expr"""
+    """Parse variable declaration"""
     self.expect("VAR")
-    name = self.expect("IDENTIFIER")
+    self.expect("IDENTIFIER")
 
-    value = None
     if self.match("ASSIGN"):
       self.consume()
-      value = self.expression()
-
-    return ("var_decl", name, value)
+      self.expression()
 
   @rule
   def assignment_statement(self):
-    """Parse assignment: name = expr"""
-    name = self.expect("IDENTIFIER")
+    """Parse assignment"""
+    self.expect("IDENTIFIER")
     self.expect("ASSIGN")
-    value = self.expression()
-    return ("assign", name, value)
+    self.expression()
 
   @rule
   def if_statement(self):
-    """Parse if statement with optional else."""
+    """Parse if statement"""
     self.expect("IF")
-    condition = self.expression()
+    self.expression()
     self.expect("COLON")
     self.expect("NEWLINE")
 
-    # Parse indented then-block
     self.expect("INDENT")
-    then_block = self.block()
+    self.block()
     self.expect("DEDENT")
 
-    # Optional else clause
-    else_block = None
+    # Optional else
     if self.match("ELSE"):
       self.consume()
       self.expect("COLON")
       self.expect("NEWLINE")
       self.expect("INDENT")
-      else_block = self.block()
+      self.block()
       self.expect("DEDENT")
-
-    return ("if", condition, then_block, else_block)
 
   @rule
   def while_statement(self):
-    """Parse while loop."""
+    """Parse while loop"""
     self.expect("WHILE")
-    condition = self.expression()
+    self.expression()
     self.expect("COLON")
     self.expect("NEWLINE")
 
     self.expect("INDENT")
-    body = self.block()
+    self.block()
     self.expect("DEDENT")
-
-    return ("while", condition, body)
 
   @rule
   def function_def(self):
-    """Parse function definition."""
+    """Parse function definition"""
     self.expect("DEF")
-    name = self.expect("IDENTIFIER")
+    self.expect("IDENTIFIER")
     self.expect("LPAREN")
 
-    # Parse parameter list
-    params = []
+    # Parameters
     if not self.match("RPAREN"):
-      params = self.separated(lambda: self.expect("IDENTIFIER"), "COMMA")
+      self.separated(lambda: self.expect("IDENTIFIER"), "COMMA")
 
     self.expect("RPAREN")
     self.expect("COLON")
     self.expect("NEWLINE")
 
     self.expect("INDENT")
-    body = self.block()
+    self.block()
     self.expect("DEDENT")
-
-    return ("function", name, params, body)
 
   @rule
   def return_statement(self):
-    """Parse return statement."""
+    """Parse return statement"""
     self.expect("RETURN")
-    value = self.optional(self.expression)
-    return ("return", value)
+    if not self.match("NEWLINE"):
+      self.expression()
 
   @rule
   def expression_statement(self):
-    """Parse expression as statement."""
-    expr = self.expression()
-    return ("expr_stmt", expr)
+    """Parse expression as statement"""
+    self.expression()
 
+  @rule
   def block(self):
-    """Parse a block of statements."""
-    statements = []
-
+    """Parse block of statements"""
     while not self.match("DEDENT", "EOF"):
-      stmt = self.statement()
-      statements.append(stmt)
+      self.statement()
 
-      # Handle newlines between statements
       while self.match("NEWLINE"):
         self.consume()
-
-    return statements
 
   # ===== Expressions =====
 
   def expression(self):
-    """Parse expression with precedence climbing."""
-    return self.or_expression()
+    """Parse expression with precedence"""
+    self.or_expression()
 
   @rule
   def or_expression(self):
-    """Parse OR expressions (lowest precedence)."""
-    left = self.and_expression()
+    """Parse OR expressions"""
+    self.and_expression()
 
     while self.match("OR"):
-      op = self.consume()
-      right = self.and_expression()
-      left = ("binop", op.value, left, right)
-
-    return left
+      self.consume()
+      self.and_expression()
 
   @rule
   def and_expression(self):
-    """Parse AND expressions."""
-    left = self.not_expression()
+    """Parse AND expressions"""
+    self.not_expression()
 
     while self.match("AND"):
-      op = self.consume()
-      right = self.not_expression()
-      left = ("binop", op.value, left, right)
-
-    return left
+      self.consume()
+      self.not_expression()
 
   def not_expression(self):
-    """Parse NOT expressions."""
+    """Parse NOT expressions"""
     if self.match("NOT"):
-      op = self.consume()
-      operand = self.not_expression()
-      return ("unaryop", op.value, operand)
+      self._unary_op()
+    else:
+      self.comparison()
 
-    return self.comparison()
+  @rule(name="unary_op")
+  def _unary_op(self):
+    """Parse unary operation"""
+    self.consume()  # NOT
+    self.not_expression()
 
   @rule
   def comparison(self):
-    """Parse comparison expressions."""
-    left = self.additive()
+    """Parse comparison expressions"""
+    self.additive()
 
     while self.match("EQ", "NE", "LT", "LE", "GT", "GE"):
-      op = self.consume()
-      right = self.additive()
-      left = ("binop", op.type, left, right)
-
-    return left
+      self.consume()
+      self.additive()
 
   @rule
   def additive(self):
-    """Parse addition/subtraction."""
-    left = self.multiplicative()
+    """Parse addition/subtraction"""
+    self.multiplicative()
 
     while self.match("PLUS", "MINUS"):
-      op = self.consume()
-      right = self.multiplicative()
-      left = ("binop", op.type, left, right)
-
-    return left
+      self.consume()
+      self.multiplicative()
 
   @rule
   def multiplicative(self):
-    """Parse multiplication/division/modulo."""
-    left = self.power()
+    """Parse multiplication/division"""
+    self.power()
 
     while self.match("TIMES", "DIVIDE", "MODULO"):
-      op = self.consume()
-      right = self.power()
-      left = ("binop", op.type, left, right)
-
-    return left
+      self.consume()
+      self.power()
 
   @rule
   def power(self):
-    """Parse exponentiation (right-associative)."""
-    left = self.unary()
+    """Parse exponentiation"""
+    self.unary()
 
     if self.match("POWER"):
-      op = self.consume()
-      # Right-associative recursion
-      right = self.power()
-      return ("binop", op.type, left, right)
-
-    return left
+      self.consume()
+      self.power()  # Right associative
 
   def unary(self):
-    """Parse unary expressions."""
+    """Parse unary expressions"""
     if self.match("PLUS", "MINUS"):
-      op = self.consume()
-      operand = self.unary()
-      return ("unaryop", op.type, operand)
+      self._prefix_op()
+    else:
+      self.postfix()
 
-    return self.postfix()
+  @rule(name="unary_op")
+  def _prefix_op(self):
+    """Parse prefix operation"""
+    self.consume()  # operator
+    self.unary()
 
   @rule
   def postfix(self):
-    """Parse postfix expressions (function calls)."""
-    expr = self.primary()
+    """Parse postfix expressions"""
+    self.primary()
 
     while self.match("LPAREN"):
-      self.consume()
+      self._function_call()
 
-      # Parse arguments
-      args = []
-      if not self.match("RPAREN"):
-        args = self.separated(self.expression, "COMMA")
+  @rule(name="call")
+  def _function_call(self):
+    """Parse function call arguments"""
+    self.expect("LPAREN")
 
-      self.expect("RPAREN")
-      expr = ("call", expr, args)
+    if not self.match("RPAREN"):
+      self.separated(self.expression, "COMMA")
 
-    return expr
+    self.expect("RPAREN")
 
   def primary(self):
-    """Parse primary expressions."""
-    # Parenthesized expression
+    """Parse primary expressions"""
     if self.match("LPAREN"):
+      self._parenthesized()
+    elif self.match("NUMBER"):
       self.consume()
-      expr = self.expression()
-      self.expect("RPAREN")
-      return expr
-
-    # Literals and identifiers
-    if self.match("NUMBER"):
-      token = self.consume()
-      return ("number", float(token.value))
-
-    if self.match("STRING"):
-      token = self.consume()
-      # Process escape sequences
-      value = token.value[1:-1]  # Remove quotes
-      value = value.replace(r"\n", "\n")
-      value = value.replace(r"\t", "\t")
-      value = value.replace(r"\\", "\\")
-      value = value.replace(r"\"", '"')
-      value = value.replace(r"\'", "'")
-      return ("string", value)
-
-    if self.match("TRUE"):
+    elif self.match("STRING"):
       self.consume()
-      return ("bool", True)
-
-    if self.match("FALSE"):
+    elif self.match("TRUE", "FALSE"):
       self.consume()
-      return ("bool", False)
+    elif self.match("IDENTIFIER"):
+      self.consume()
+    else:
+      token = self.peek()
+      raise ParseError(f"Unexpected token: {token.type if token else 'EOF'}")
 
-    if self.match("IDENTIFIER"):
-      token = self.consume()
-      return ("id", token.value)
+  @rule(name="paren_expr")
+  def _parenthesized(self):
+    """Parse parenthesized expression"""
+    self.expect("LPAREN")
+    self.expression()
+    self.expect("RPAREN")
 
-    raise ParseError(f"Unexpected token: {self.peek()}")
+  def parse_root(self):
+    """Parse MiniLang grammar root"""
+    self.program()
 
 
-# ===== CST to AST Transformer =====
+# ===== AST Builder =====
 
 
 class ASTBuilder(Visitor):
-  """Transform CST to typed AST nodes."""
+  """Transform CST to typed AST nodes"""
 
-  def visit_program(self, node: Node) -> Program:
-    """Build Program AST node."""
+  def visit_program(self, node: NodeView) -> Program:
+    """Build Program node"""
     statements = []
+
     for child in node.children:
-      if isinstance(child, list):
-        statements.extend(self.visit(item) for item in child)
-      elif not isinstance(child, Token):
+      if child.kind in (
+        "var_declaration",
+        "assignment_statement",
+        "if_statement",
+        "while_statement",
+        "function_def",
+        "return_statement",
+        "expression_statement",
+      ):
         statements.append(self.visit(child))
 
     return Program(line=1, column=1, statements=statements)
 
-  def visit(self, node):
-    """Route visits based on node structure."""
-    if isinstance(node, Node):
-      return super().visit(node)
+  def visit_var_declaration(self, node: NodeView) -> VarDecl:
+    """Build VarDecl node"""
+    # Find identifier token
+    name_token = self._find_child(node, "IDENTIFIER")
+    name = name_token.text
 
-    if isinstance(node, tuple):
-      node_type = node[0]
+    # Check for initial value
+    value = None
+    if self._has_child(node, "ASSIGN"):
+      # Find expression after ASSIGN
+      assign_idx = self._find_child_index(node, "ASSIGN")
+      for i in range(assign_idx + 1, len(node.children)):
+        child = node.children[i]
+        if self._is_expression(child):
+          value = self.visit(child)
+          break
 
-      # Statements
-      if node_type == "var_decl":
-        name = node[1].value
-        value = self.visit(node[2]) if node[2] else None
-        return VarDecl(node[1].line, node[1].column, name, value)
+    return VarDecl(line=name_token.line, column=name_token.column, name=name, value=value)
 
-      elif node_type == "assign":
-        name = node[1].value
-        value = self.visit(node[2])
-        return Assignment(node[1].line, node[1].column, name, value)
+  def visit_assignment_statement(self, node: NodeView) -> Assignment:
+    """Build Assignment node"""
+    name_token = self._find_child(node, "IDENTIFIER")
 
-      elif node_type == "if":
-        condition = self.visit(node[1])
-        then_block = [self.visit(s) for s in node[2]]
-        else_block = [self.visit(s) for s in node[3]] if node[3] else None
-        return IfStatement(1, 1, condition, then_block, else_block)
+    # Find expression after ASSIGN
+    assign_idx = self._find_child_index(node, "ASSIGN")
+    expr = None
+    for i in range(assign_idx + 1, len(node.children)):
+      child = node.children[i]
+      if self._is_expression(child):
+        expr = self.visit(child)
+        break
 
-      elif node_type == "while":
-        condition = self.visit(node[1])
-        body = [self.visit(s) for s in node[2]]
-        return WhileStatement(1, 1, condition, body)
+    return Assignment(line=name_token.line, column=name_token.column, name=name_token.text, value=expr)
 
-      elif node_type == "function":
-        name = node[1].value
-        params = [p.value for p in node[2]]
-        body = [self.visit(s) for s in node[3]]
-        return FunctionDef(node[1].line, node[1].column, name, params, body)
+  def visit_if_statement(self, node: NodeView) -> IfStatement:
+    """Build IfStatement node"""
+    # Find condition (first expression)
+    condition = None
+    then_block = []
+    else_block = None
 
-      elif node_type == "return":
-        value = self.visit(node[1]) if node[1] else None
-        return Return(1, 1, value)
+    for child in node.children:
+      if self._is_expression(child) and condition is None:
+        condition = self.visit(child)
+      elif child.kind == "block":
+        if not then_block:
+          then_block = self._visit_block(child)
+        else:
+          else_block = self._visit_block(child)
 
-      elif node_type == "expr_stmt":
-        return ExprStatement(1, 1, self.visit(node[1]))
+    return IfStatement(
+      line=self._find_child(node, "IF").line,
+      column=self._find_child(node, "IF").column,
+      condition=condition,
+      then_block=then_block,
+      else_block=else_block,
+    )
 
-      # Expressions
-      elif node_type == "binop":
-        op = node[1]
-        left = self.visit(node[2])
-        right = self.visit(node[3])
-        return BinaryOp(1, 1, op, left, right)
+  def visit_while_statement(self, node: NodeView) -> WhileStatement:
+    """Build WhileStatement node"""
+    condition = None
+    body = []
 
-      elif node_type == "unaryop":
-        op = node[1]
-        operand = self.visit(node[2])
-        return UnaryOp(1, 1, op, operand)
+    for child in node.children:
+      if self._is_expression(child):
+        condition = self.visit(child)
+      elif child.kind == "block":
+        body = self._visit_block(child)
 
-      elif node_type == "call":
-        func = self.visit(node[1])
-        args = [self.visit(arg) for arg in node[2]]
-        return FunctionCall(func.line, func.column, func.name, args)
+    return WhileStatement(
+      line=self._find_child(node, "WHILE").line,
+      column=self._find_child(node, "WHILE").column,
+      condition=condition,
+      body=body,
+    )
 
-      elif node_type == "id":
-        return Identifier(1, 1, node[1])
+  def visit_function_def(self, node: NodeView) -> FunctionDef:
+    """Build FunctionDef node"""
+    # Get function name
+    name_idx = self._find_child_index(node, "DEF") + 1
+    name_token = node.children[name_idx]
 
-      elif node_type == "number":
-        return Number(1, 1, node[1])
+    # Get parameters
+    params = []
+    in_params = False
+    for child in node.children:
+      if child.kind == "LPAREN":
+        in_params = True
+      elif child.kind == "RPAREN":
+        in_params = False
+      elif in_params and child.kind == "IDENTIFIER":
+        params.append(child.text)
 
-      elif node_type == "string":
-        return String(1, 1, node[1])
+    # Get body
+    body = []
+    for child in node.children:
+      if child.kind == "block":
+        body = self._visit_block(child)
 
-      elif node_type == "bool":
-        return Boolean(1, 1, node[1])
+    return FunctionDef(line=name_token.line, column=name_token.column, name=name_token.text, params=params, body=body)
 
-    return node
+  def visit_return_statement(self, node: NodeView) -> Return:
+    """Build Return node"""
+    value = None
+
+    for child in node.children:
+      if self._is_expression(child):
+        value = self.visit(child)
+        break
+
+    return Return(
+      line=self._find_child(node, "RETURN").line, column=self._find_child(node, "RETURN").column, value=value
+    )
+
+  def visit_expression_statement(self, node: NodeView) -> ExprStatement:
+    """Build ExprStatement node"""
+    expr = None
+
+    for child in node.children:
+      if self._is_expression(child):
+        expr = self.visit(child)
+        break
+
+    return ExprStatement(line=1, column=1, expression=expr)
+
+  def _visit_block(self, node: NodeView) -> List[Statement]:
+    """Extract statements from block"""
+    statements = []
+
+    for child in node.children:
+      if child.kind in (
+        "var_declaration",
+        "assignment_statement",
+        "if_statement",
+        "while_statement",
+        "function_def",
+        "return_statement",
+        "expression_statement",
+      ):
+        statements.append(self.visit(child))
+
+    return statements
+
+  # Expression visitors
+
+  def visit_or_expression(self, node: NodeView) -> Expression:
+    return self._visit_binary_op(node, "or")
+
+  def visit_and_expression(self, node: NodeView) -> Expression:
+    return self._visit_binary_op(node, "and")
+
+  def visit_comparison(self, node: NodeView) -> Expression:
+    return self._visit_binary_op(node, "comparison")
+
+  def visit_additive(self, node: NodeView) -> Expression:
+    return self._visit_binary_op(node, "additive")
+
+  def visit_multiplicative(self, node: NodeView) -> Expression:
+    return self._visit_binary_op(node, "multiplicative")
+
+  def visit_power(self, node: NodeView) -> Expression:
+    return self._visit_binary_op(node, "power")
+
+  def _visit_binary_op(self, node: NodeView, op_type: str) -> Expression:
+    """Build binary operation"""
+    operands = []
+    operators = []
+
+    for child in node.children:
+      if self._is_expression(child):
+        operands.append(self.visit(child))
+      elif child.is_token and child.kind in (
+        "PLUS",
+        "MINUS",
+        "TIMES",
+        "DIVIDE",
+        "MODULO",
+        "POWER",
+        "EQ",
+        "NE",
+        "LT",
+        "LE",
+        "GT",
+        "GE",
+        "AND",
+        "OR",
+      ):
+        operators.append(child)
+
+    # Build left-associative tree
+    result = operands[0]
+    for i, op in enumerate(operators):
+      result = BinaryOp(line=op.line, column=op.column, op=op.kind, left=result, right=operands[i + 1])
+
+    return result
+
+  def visit_unary_op(self, node: NodeView) -> UnaryOp:
+    """Build unary operation"""
+    op_token = None
+    operand = None
+
+    for child in node.children:
+      if child.is_token and child.kind in ("PLUS", "MINUS", "NOT"):
+        op_token = child
+      elif self._is_expression(child):
+        operand = self.visit(child)
+
+    return UnaryOp(line=op_token.line, column=op_token.column, op=op_token.kind, operand=operand)
+
+  def visit_postfix(self, node: NodeView) -> Expression:
+    """Build postfix expression (function calls)"""
+    result = None
+
+    for child in node.children:
+      if child.kind == "primary":
+        result = self.visit(child)
+      elif child.kind == "call":
+        # Extract function name and args
+        if isinstance(result, Identifier):
+          args = self._extract_call_args(child)
+          result = FunctionCall(line=result.line, column=result.column, name=result.name, args=args)
+
+    return result
+
+  def _extract_call_args(self, node: NodeView) -> List[Expression]:
+    """Extract arguments from call node"""
+    args = []
+
+    for child in node.children:
+      if self._is_expression(child):
+        args.append(self.visit(child))
+
+    return args
+
+  def visit_primary(self, node: NodeView) -> Expression:
+    """Visit primary expression"""
+    for child in node.children:
+      if child.kind == "NUMBER":
+        return Number(line=child.line, column=child.column, value=float(child.text))
+      elif child.kind == "STRING":
+        # Remove quotes and process escapes
+        value = child.text[1:-1]
+        value = (
+          value.replace(r"\n", "\n").replace(r"\t", "\t").replace(r"\\", "\\").replace(r"\"", '"').replace(r"\'", "'")
+        )
+        return String(line=child.line, column=child.column, value=value)
+      elif child.kind == "TRUE":
+        return Boolean(line=child.line, column=child.column, value=True)
+      elif child.kind == "FALSE":
+        return Boolean(line=child.line, column=child.column, value=False)
+      elif child.kind == "IDENTIFIER":
+        return Identifier(line=child.line, column=child.column, name=child.text)
+      elif child.kind == "paren_expr":
+        # Extract expression from parentheses
+        for subchild in child.children:
+          if self._is_expression(subchild):
+            return self.visit(subchild)
+
+    return None
+
+  # Helper methods
+
+  def _is_expression(self, node: NodeView) -> bool:
+    """Check if node is an expression"""
+    return node.kind in (
+      "or_expression",
+      "and_expression",
+      "unary_op",
+      "comparison",
+      "additive",
+      "multiplicative",
+      "power",
+      "postfix",
+      "primary",
+      "paren_expr",
+    )
+
+  def _find_child(self, node: NodeView, kind: str) -> NodeView:
+    """Find first child of given kind"""
+    for child in node.children:
+      if child.kind == kind:
+        return child
+    return None
+
+  def _find_child_index(self, node: NodeView, kind: str) -> int:
+    """Find index of first child of given kind"""
+    for i, child in enumerate(node.children):
+      if child.kind == kind:
+        return i
+    return -1
+
+  def _has_child(self, node: NodeView, kind: str) -> bool:
+    """Check if node has child of given kind"""
+    return self._find_child(node, kind) is not None
 
 
-# ===== Example Usage =====
+# ===== Helper Functions =====
 
 
 def parse_minilang(code: str) -> Program:
-  """Parse MiniLang code into AST."""
+  """Parse MiniLang code into AST"""
   try:
     # Tokenize
     lexer = MiniLangLexer()
@@ -737,11 +883,11 @@ def parse_minilang(code: str) -> Program:
 
     # Parse to CST
     parser = MiniLangParser(tokens)
-    cst = parser.program()
+    cst = parser.parse()
 
     # Transform to AST
     builder = ASTBuilder()
-    ast = builder.visit(cst)
+    ast = builder.visit(cst.root)
 
     return ast
 
@@ -754,7 +900,7 @@ def parse_minilang(code: str) -> Program:
 
 
 def print_ast(node: ASTNode, indent: int = 0):
-  """Pretty print AST structure."""
+  """Pretty print AST structure"""
   prefix = "  " * indent
 
   if isinstance(node, Program):
@@ -836,7 +982,7 @@ def print_ast(node: ASTNode, indent: int = 0):
 # ===== Test Cases =====
 
 if __name__ == "__main__":
-  # Example 1: Variable declarations and expressions
+  # Example 1: Variables and expressions
   code1 = """
 var x = 10
 var y = 20
@@ -886,19 +1032,3 @@ var result = factorial(5)
   print("\nAST:")
   ast3 = parse_minilang(code3)
   print_ast(ast3)
-  print()
-
-  # Example 4: String handling and complex expressions
-  code4 = """
-var name = "Alice"
-var greeting = "Hello, " + name + "!\\n"
-var complex = (2 + 3) * 4 ** 2 / 2
-var condition = x > 10 and y < 20 or not z
-"""
-
-  print("=== Example 4: Strings and Complex Expressions ===")
-  print("Code:")
-  print(code4)
-  print("\nAST:")
-  ast4 = parse_minilang(code4)
-  print_ast(ast4)

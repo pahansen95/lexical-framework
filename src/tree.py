@@ -61,7 +61,7 @@ class FrozenNode:
 class NodeView:
   """Navigation facade over frozen nodes"""
 
-  __slots__ = ("_frozen", "_parent_ref", "_position", "_cached_children", "_index")
+  __slots__ = ("_frozen", "_parent_ref", "_position", "_cached_children", "_index", "__weakref__")
 
   def __init__(
     self, frozen: Union[FrozenNode, FrozenToken], parent: Optional["NodeView"] = None, position: int = 0, index: int = 0
