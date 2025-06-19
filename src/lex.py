@@ -229,6 +229,23 @@ class Lexer:
       state_copy = type(template)(template.value)
       setattr(self, name, state_copy)
 
+    # Bind method patterns to this instance
+    self._bound_patterns = []
+    for pattern in self._patterns:
+      if hasattr(pattern, "_method_pattern") and pattern._method_pattern:
+        # Create a bound version of the pattern
+        bound_pattern = Pattern(
+          name=pattern.name,
+          matcher=lambda pos, method=pattern.matcher: method(self, pos),
+          priority=pattern.priority,
+          skip=pattern.skip,
+          when=pattern.when,
+          at_line_start=pattern.at_line_start,
+        )
+        self._bound_patterns.append(bound_pattern)
+      else:
+        self._bound_patterns.append(pattern)
+
   def lex(self, text: str) -> Iterator[Token]:
     """Tokenize input text"""
     if text and not text.endswith("\n"):
@@ -255,8 +272,8 @@ class Lexer:
     if pos.at_end:
       return None
 
-    # Use bound patterns if available (for instance methods)
-    patterns = getattr(self, "_bound_patterns", self._patterns)
+    # Use bound patterns for this instance
+    patterns = self._bound_patterns
 
     for pattern in patterns:
       if pattern.at_line_start and not pos.at_line_start:
