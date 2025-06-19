@@ -1,66 +1,35 @@
 """
-Simplified Parser Framework
+Recursive descent parsing framework with frozen tree construction.
 
-A declarative framework for building recursive descent parsers with automatic
-CST construction and clean grammar expression.
+Provides parser combinators and rule decorators for building parsers
+that emit immutable syntax trees through an integrated builder pattern.
 """
 
-from dataclasses import dataclass, field
-from typing import Any, List, Optional, Callable, Union
+from typing import List, Optional, Callable, Any
 from contextlib import contextmanager
-
-
-# ===== Core Data Structures =====
-
-
-@dataclass
-class Token:
-  """Represents a lexical token."""
-
-  type: str
-  value: str
-  pos: int
-  line: int
-  column: int
-
-  def __repr__(self):
-    return f"Token({self.type}, {repr(self.value)})"
-
-
-@dataclass
-class Node:
-  """Represents a node in the parse tree."""
-
-  type: str
-  children: List[Union["Node", Token]] = field(default_factory=list)
-
-  def __repr__(self):
-    return f"Node({self.type}, {len(self.children)} children)"
+from tree import TreeBuilder, NodeView
 
 
 class ParseError(Exception):
-  """Raised when parsing fails."""
+  """Raised when parsing fails"""
 
   pass
 
 
-# ===== Token Stream =====
-
-
 class TokenStream:
-  """Manages navigation through tokens."""
+  """Manages navigation through tokens"""
 
-  def __init__(self, tokens: List[Token]):
+  def __init__(self, tokens: List):
     self.tokens = tokens
     self.pos = 0
 
-  def peek(self, offset: int = 0) -> Optional[Token]:
-    """Look ahead without consuming."""
+  def peek(self, offset: int = 0) -> Optional:
+    """Look ahead without consuming"""
     idx = self.pos + offset
     return self.tokens[idx] if idx < len(self.tokens) else None
 
-  def consume(self) -> Token:
-    """Consume and return current token."""
+  def consume(self):
+    """Consume and return current token"""
     if self.at_end():
       raise ParseError("Unexpected end of input")
     token = self.tokens[self.pos]
@@ -68,12 +37,12 @@ class TokenStream:
     return token
 
   def match(self, *types: str) -> bool:
-    """Check if current token matches types."""
+    """Check if current token matches types"""
     token = self.peek()
     return token and token.type in types
 
-  def expect(self, *types: str) -> Token:
-    """Consume token of expected type."""
+  def expect(self, *types: str):
+    """Consume token of expected type"""
     token = self.peek()
     if not token:
       raise ParseError(f"Expected {types} but reached end")
@@ -82,45 +51,49 @@ class TokenStream:
     return self.consume()
 
   def at_end(self) -> bool:
-    """Check if at end of stream."""
+    """Check if at end of stream"""
     return self.pos >= len(self.tokens)
 
   def save(self) -> int:
-    """Save current position."""
+    """Save current position"""
     return self.pos
 
   def restore(self, pos: int):
-    """Restore saved position."""
+    """Restore saved position"""
     self.pos = pos
 
 
-# ===== Parser Base Class =====
-
-
 class Parser:
-  """Base class for recursive descent parsers."""
+  """Base class for recursive descent parsers"""
 
-  def __init__(self, tokens: List[Token]):
+  def __init__(self, tokens: List):
     self.tokens = TokenStream(tokens)
+    self.builder = TreeBuilder()
     self.structural_tokens = {"WHITESPACE", "COMMENT", "NEWLINE"}
     self.skip_structural = False
 
   # ===== Token Operations =====
 
-  def consume(self) -> Token:
-    """Consume next token."""
+  def consume(self):
+    """Consume next token"""
     if self.skip_structural:
       self._skip_structural_tokens()
-    return self.tokens.consume()
 
-  def expect(self, *types: str) -> Token:
-    """Expect and consume token."""
+    token = self.tokens.consume()
+    self.builder.add_token(token)
+    return token
+
+  def expect(self, *types: str):
+    """Expect and consume token"""
     if self.skip_structural:
       self._skip_structural_tokens()
-    return self.tokens.expect(*types)
+
+    token = self.tokens.expect(*types)
+    self.builder.add_token(token)
+    return token
 
   def match(self, *types: str) -> bool:
-    """Check if next token matches."""
+    """Check if next token matches"""
     if self.skip_structural:
       pos = self.tokens.save()
       self._skip_structural_tokens()
@@ -129,8 +102,8 @@ class Parser:
       return result
     return self.tokens.match(*types)
 
-  def peek(self) -> Optional[Token]:
-    """Look at next token."""
+  def peek(self) -> Optional:
+    """Look at next token"""
     if self.skip_structural:
       pos = self.tokens.save()
       self._skip_structural_tokens()
@@ -140,28 +113,33 @@ class Parser:
     return self.tokens.peek()
 
   def _skip_structural_tokens(self):
-    """Skip over structural tokens."""
+    """Skip over structural tokens"""
     while self.tokens.match(*self.structural_tokens):
       self.tokens.consume()
 
   # ===== Parser Combinators =====
 
   def choice(self, *alternatives: Callable) -> Any:
-    """Try alternatives in order."""
-    pos = self.tokens.save()
+    """Try alternatives in order"""
     last_error = None
 
     for alt in alternatives:
+      pos = self.tokens.save()
+      builder_depth = len(self.builder._stack)
+
       try:
         return alt()
       except ParseError as e:
         last_error = e
         self.tokens.restore(pos)
+        # Restore builder state
+        while len(self.builder._stack) > builder_depth:
+          self.builder.abandon_node()
 
     raise last_error or ParseError("No alternatives matched")
 
   def many(self, parser_fn: Callable) -> List[Any]:
-    """Parse zero or more occurrences."""
+    """Parse zero or more occurrences"""
     results = []
     while True:
       pos = self.tokens.save()
@@ -173,13 +151,13 @@ class Parser:
     return results
 
   def some(self, parser_fn: Callable) -> List[Any]:
-    """Parse one or more occurrences."""
+    """Parse one or more occurrences"""
     results = [parser_fn()]
     results.extend(self.many(parser_fn))
     return results
 
   def optional(self, parser_fn: Callable) -> Optional[Any]:
-    """Parse zero or one occurrence."""
+    """Parse zero or one occurrence"""
     pos = self.tokens.save()
     try:
       return parser_fn()
@@ -188,7 +166,7 @@ class Parser:
       return None
 
   def separated(self, parser_fn: Callable, delimiter: str) -> List[Any]:
-    """Parse delimited sequence."""
+    """Parse delimited sequence"""
     results = [parser_fn()]
     while self.match(delimiter):
       self.consume()
@@ -199,7 +177,7 @@ class Parser:
 
   @contextmanager
   def structural_handling(self, enabled: bool):
-    """Temporarily change structural token handling."""
+    """Temporarily change structural token handling"""
     old_value = self.skip_structural
     self.skip_structural = enabled
     try:
@@ -209,7 +187,7 @@ class Parser:
 
   @contextmanager
   def custom_structural(self, tokens: set):
-    """Temporarily use custom structural tokens."""
+    """Temporarily use custom structural tokens"""
     old_tokens = self.structural_tokens
     self.structural_tokens = tokens
     try:
@@ -218,73 +196,44 @@ class Parser:
       self.structural_tokens = old_tokens
 
 
-# ===== Rule Decorator =====
-
-
 def rule(fn: Callable = None, *, name: Optional[str] = None, capture: bool = True):
-  """Decorator for parser rules."""
+  """Decorator for parser rules"""
 
   def decorator(func):
     def wrapper(self: Parser, *args, **kwargs):
-      # Get rule name
       rule_name = name or func.__name__
 
-      # Track tokens if capturing
       if capture:
-        captured_tokens = []
-
-        # Monkey-patch consume to track tokens
-        original_consume = self.tokens.consume
-
-        def tracking_consume():
-          token = original_consume()
-          captured_tokens.append(token)
-          return token
-
-        self.tokens.consume = tracking_consume
+        self.builder.start_node(rule_name)
 
       try:
-        # Execute rule
         result = func(self, *args, **kwargs)
 
-        # Create node if capturing
-        if capture and captured_tokens:
-          node = Node(rule_name, captured_tokens)
-          return node
+        if capture:
+          self.builder.finish_node(rule_name)
 
         return result
-      finally:
-        # Restore original consume
+      except Exception:
         if capture:
-          self.tokens.consume = original_consume
+          self.builder.abandon_node()
+        raise
 
+    wrapper.__name__ = func.__name__
     return wrapper
 
-  if fn is None:
-    return decorator
-  return decorator(fn)
-
-
-# ===== Visitor Pattern =====
+  return decorator if fn is None else decorator(fn)
 
 
 class Visitor:
-  """Base class for tree traversal."""
+  """Base class for tree traversal"""
 
-  def visit(self, node: Union[Node, Token]) -> Any:
-    """Visit a node or token."""
-    if isinstance(node, Token):
-      return self.visit_token(node)
-
-    method_name = f"visit_{node.type}"
+  def visit(self, node: NodeView) -> Any:
+    """Visit a node or token"""
+    method_name = f"visit_{node.kind}"
     method = getattr(self, method_name, self.generic_visit)
     return method(node)
 
-  def visit_token(self, token: Token) -> Any:
-    """Visit a token."""
-    return token.value
-
-  def generic_visit(self, node: Node) -> Any:
-    """Default visitor for unhandled nodes."""
+  def generic_visit(self, node: NodeView) -> Any:
+    """Default visitor for unhandled nodes"""
     for child in node.children:
       self.visit(child)

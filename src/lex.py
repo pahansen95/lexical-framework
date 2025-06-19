@@ -1,8 +1,8 @@
 """
-Simplified Lexer Framework
+Lexical analysis framework for declarative token recognition.
 
-A declarative framework for building lexical analyzers with clear pattern
-definitions and straightforward state management.
+Transforms source text into immutable tokens through pattern-based matching
+with support for stateful lexing and position tracking.
 """
 
 import re
@@ -10,12 +10,9 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Callable, Iterator, Any
 
 
-# ===== Core Data Structures =====
-
-
-@dataclass
+@dataclass(frozen=True)
 class Token:
-  """Represents a lexical token with position information."""
+  """Immutable token with position information"""
 
   type: str
   value: str
@@ -23,20 +20,21 @@ class Token:
   line: int
   column: int
 
-  def __repr__(self):
-    return f"Token({self.type}, {repr(self.value)}, {self.line}:{self.column})"
+  @property
+  def width(self) -> int:
+    return len(self.value)
 
 
 @dataclass
 class Match:
-  """Result of a pattern match."""
+  """Result of pattern match"""
 
   value: str
   length: int
 
 
 class LexError(Exception):
-  """Lexical analysis error with position context."""
+  """Lexical analysis error with position context"""
 
   def __init__(self, message: str, line: int, column: int, source: Optional[str] = None):
     self.line = line
@@ -55,11 +53,8 @@ class LexError(Exception):
     super().__init__(error_msg)
 
 
-# ===== Position Tracking =====
-
-
 class Position:
-  """Tracks position in source text."""
+  """Tracks position in source text"""
 
   def __init__(self, text: str):
     self.text = text
@@ -68,7 +63,7 @@ class Position:
     self.column = 1
 
   def advance(self, count: int = 1):
-    """Move position forward."""
+    """Move position forward"""
     for _ in range(count):
       if self.pos < len(self.text):
         if self.text[self.pos] == "\n":
@@ -79,39 +74,34 @@ class Position:
         self.pos += 1
 
   def peek(self, offset: int = 0) -> Optional[str]:
-    """Look ahead without advancing."""
+    """Look ahead without advancing"""
     idx = self.pos + offset
     return self.text[idx] if idx < len(self.text) else None
 
   @property
   def at_end(self) -> bool:
-    """Check if at end of input."""
     return self.pos >= len(self.text)
 
   @property
   def at_line_start(self) -> bool:
-    """Check if at start of line."""
     return self.column == 1
 
   def match_regex(self, pattern: re.Pattern) -> Optional[Match]:
-    """Try to match regex at current position."""
+    """Try to match regex at current position"""
     if match := pattern.match(self.text, self.pos):
       return Match(match.group(0), match.end() - match.start())
     return None
 
   def match_literal(self, text: str) -> Optional[Match]:
-    """Try to match literal text."""
+    """Try to match literal text"""
     if self.text[self.pos :].startswith(text):
       return Match(text, len(text))
     return None
 
 
-# ===== Pattern Definition =====
-
-
 @dataclass
 class Pattern:
-  """Defines a token pattern."""
+  """Token pattern definition"""
 
   name: str
   matcher: Callable[[Position], Optional[Match]]
@@ -122,36 +112,29 @@ class Pattern:
 
 
 class PatternBuilder:
-  """Builder for creating patterns."""
+  """Builder for creating patterns"""
 
   @staticmethod
   def regex(pattern: str, **kwargs) -> Pattern:
-    """Create regex-based pattern."""
     compiled = re.compile(pattern)
     return Pattern(name="", matcher=lambda pos: pos.match_regex(compiled), **kwargs)
 
   @staticmethod
   def literal(text: str, **kwargs) -> Pattern:
-    """Create literal pattern."""
     return Pattern(name="", matcher=lambda pos: pos.match_literal(text), **kwargs)
 
   @staticmethod
   def method(fn: Callable) -> Pattern:
-    """Create method-based pattern."""
-
     def matcher(pos: Position) -> Optional[Match]:
-      # Mark position for potential backtrack
       start_pos = pos.pos
       start_line = pos.line
       start_col = pos.column
 
-      # Call method with position
       if fn(pos):
         length = pos.pos - start_pos
         value = pos.text[start_pos : pos.pos]
         return Match(value, length)
       else:
-        # Restore position on failure
         pos.pos = start_pos
         pos.line = start_line
         pos.column = start_col
@@ -160,15 +143,11 @@ class PatternBuilder:
     return Pattern(name=fn.__name__, matcher=matcher, **getattr(fn, "_pattern_kwargs", {}))
 
 
-# Pattern builder instance
 pattern = PatternBuilder()
 
 
-# ===== Decorators =====
-
-
 def token(**kwargs):
-  """Decorator for method-based token patterns."""
+  """Decorator for method-based patterns"""
 
   def decorator(fn):
     fn._pattern_kwargs = kwargs
@@ -177,12 +156,9 @@ def token(**kwargs):
   return decorator
 
 
-# ===== State Management =====
-
-
 @dataclass
 class State:
-  """Simple state container."""
+  """Simple state container"""
 
   value: Any
   initial: Any = field(init=False)
@@ -191,17 +167,15 @@ class State:
     self.initial = self.value
 
   def set(self, value: Any):
-    """Update state value."""
     self.value = value
 
   def reset(self):
-    """Reset to initial value."""
     self.value = self.initial
 
 
 @dataclass
 class Counter(State):
-  """Counter state for numeric values."""
+  """Counter state for numeric values"""
 
   value: int = 0
 
@@ -216,7 +190,7 @@ class Counter(State):
 
 @dataclass
 class Stack(State):
-  """Stack state for nested contexts."""
+  """Stack state for nested contexts"""
 
   value: List[Any] = field(default_factory=list)
 
@@ -235,14 +209,11 @@ class Stack(State):
     return len(self.value)
 
 
-# ===== Lexer Base Class =====
-
-
 class Lexer:
-  """Base class for lexical analyzers."""
+  """Base class for lexical analyzers"""
 
   def __init_subclass__(cls):
-    """Collect patterns from class definition."""
+    """Collect patterns from class definition"""
     cls._patterns = []
     cls._states = {}
 
@@ -251,26 +222,21 @@ class Lexer:
         value.name = value.name or name
         cls._patterns.append(value)
       elif hasattr(value, "_pattern_kwargs"):
-        # Method-based pattern
         pattern_obj = pattern.method(value)
         pattern_obj.name = name
         cls._patterns.append(pattern_obj)
       elif isinstance(value, State):
         cls._states[name] = value
 
-    # Sort by priority (highest first)
     cls._patterns.sort(key=lambda p: p.priority, reverse=True)
 
   def __init__(self):
-    """Initialize lexer instance."""
-    # Create instance copies of states
     for name, template in self._states.items():
       state_copy = type(template)(template.value)
       setattr(self, name, state_copy)
 
   def lex(self, text: str) -> Iterator[Token]:
-    """Tokenize input text."""
-    # Ensure text ends with newline
+    """Tokenize input text"""
     if text and not text.endswith("\n"):
       text += "\n"
 
@@ -282,7 +248,6 @@ class Lexer:
         if token:
           yield token
 
-      # Generate end marker
       yield Token("EOF", "", pos.pos, pos.line, pos.column)
 
     except Exception as e:
@@ -291,30 +256,22 @@ class Lexer:
       raise LexError(str(e), pos.line, pos.column, text)
 
   def _next_token(self, pos: Position) -> Optional[Token]:
-    """Find and consume next token."""
+    """Find and consume next token"""
     for pattern in self._patterns:
-      # Check conditions
       if pattern.at_line_start and not pos.at_line_start:
         continue
 
       if pattern.when and not pattern.when(self):
         continue
 
-      # Try to match
       if match := pattern.matcher(pos):
-        # Create token
         token = Token(pattern.name, match.value, pos.pos, pos.line, pos.column)
-
-        # Advance position
         pos.advance(match.length)
 
-        # Return token unless skip
         if not pattern.skip:
           return token
 
-        # For skip tokens, continue to next
         return self._next_token(pos)
 
-    # No match found
     char = pos.peek()
     raise LexError(f"Unexpected character '{char}'", pos.line, pos.column, pos.text)
