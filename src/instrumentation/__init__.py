@@ -15,8 +15,9 @@ Usage:
     # Attach a handler
     instrumentation.attach(instrumentation.create_print_handler())
 
-    # Emit events
-    instrumentation.emit('parse.start', 'file.py')
+    # Emit events with automatic context
+    with instrumentation.parsing_rule('expression'):
+        instrumentation.emit('parse.start', 'file.py')
 """
 
 # Core API
@@ -36,6 +37,15 @@ from .core import (
   set_timestamp_mode,
   # Pool configuration
   configure_pool,
+  # Context management
+  set_context,
+  increment_depth,
+  parsing_rule,
+  # Context variables (for direct access if needed)
+  trace_id,
+  parse_depth,
+  current_rule,
+  current_file,
 )
 
 # Pre-built handlers (optional)
@@ -63,6 +73,14 @@ __all__ = [
   "reset_filters",
   "set_timestamp_mode",
   "configure_pool",
+  # Context management
+  "set_context",
+  "increment_depth",
+  "parsing_rule",
+  "trace_id",
+  "parse_depth",
+  "current_rule",
+  "current_file",
   # Handlers
   "create_print_handler",
   "create_metrics_handler",

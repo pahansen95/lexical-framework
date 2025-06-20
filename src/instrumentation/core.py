@@ -11,6 +11,7 @@ from collections import deque
 import time
 import sys
 import threading
+import contextvars
 
 # Module state with thread safety
 _handlers: List[Callable[[Dict[str, Any]], None]] = []
@@ -31,12 +32,84 @@ _pool_size: int = 1000
 _pool_enabled: bool = True
 _pool_lock = threading.Lock()
 
+# Context variables for automatic propagation
+trace_id = contextvars.ContextVar("trace_id", default=None)
+parse_depth = contextvars.ContextVar("parse_depth", default=0)
+current_rule = contextvars.ContextVar("current_rule", default=None)
+current_file = contextvars.ContextVar("current_file", default=None)
+
+
+# Context management helpers
+@contextmanager
+def set_context(**kwargs):
+  """
+  Temporarily set context variables.
+
+  Example:
+    with set_context(trace_id='abc123', current_file='test.py'):
+      emit('parse.start', 'beginning parse')
+  """
+  tokens = []
+  old_values = {}
+
+  # Set new values and save old
+  for name, value in kwargs.items():
+    if name in globals():
+      var = globals()[name]
+      if isinstance(var, contextvars.ContextVar):
+        old_values[name] = var.get()
+        tokens.append(var.set(value))
+
+  try:
+    yield
+  finally:
+    # Restore old values
+    for token in tokens:
+      token.var.reset(token)
+
+
+@contextmanager
+def increment_depth():
+  """
+  Context manager to track parse depth.
+
+  Example:
+    with increment_depth():
+      parse_expression()  # depth automatically incremented
+  """
+  current = parse_depth.get()
+  token = parse_depth.set(current + 1)
+  try:
+    yield current + 1
+  finally:
+    parse_depth.reset(token)
+
+
+@contextmanager
+def parsing_rule(rule_name: str):
+  """
+  Context manager to track current parsing rule.
+
+  Example:
+    with parsing_rule('expression'):
+      # Events emitted here will include rule='expression'
+      parse_expression_impl()
+  """
+  token = current_rule.set(rule_name)
+  try:
+    yield
+  finally:
+    current_rule.reset(token)
+
+
 # Public API
 
 
 def emit(event_type: str, value: Any, **context) -> None:
   """
   Emit an event with optional context.
+
+  Context variables are automatically included in the event.
 
   Args:
     event_type: Dot-notation event identifier (e.g. 'rule.enter')
@@ -76,7 +149,21 @@ def emit(event_type: str, value: Any, **context) -> None:
     event["timestamp"] = abs_time
     event["timestamp_ms"] = _format_timestamp_ms(abs_time - (_start_time_ns or abs_time))
 
-  # Add context
+  # Add automatic context from context variables
+  if tid := trace_id.get():
+    event["trace_id"] = tid
+
+  depth = parse_depth.get()
+  if depth > 0:
+    event["depth"] = depth
+
+  if rule := current_rule.get():
+    event["rule"] = rule
+
+  if file := current_file.get():
+    event["file"] = file
+
+  # Add explicit context (can override automatic)
   for k, v in context.items():
     event[k] = v
 
@@ -91,7 +178,7 @@ def emit(event_type: str, value: Any, **context) -> None:
     except Exception as e:
       if __debug__:
         # In debug mode, log handler errors to stderr
-        print(f"Handler error in {handler.__name__}: {e}", file=sys.stderr)
+        print("Handler error in %s: %s" % (handler.__name__, e), file=sys.stderr)
       # Continue processing other handlers
 
   # Return to pool if borrowed
@@ -110,7 +197,7 @@ def attach(handler: Callable[[Dict[str, Any]], None]) -> None:
     TypeError: If handler is not callable
   """
   if not callable(handler):
-    raise TypeError(f"Handler must be callable, got {type(handler).__name__}")
+    raise TypeError("Handler must be callable, got %s" % type(handler).__name__)
 
   with _lock:
     _handlers.append(handler)
@@ -178,7 +265,7 @@ def set_timestamp_mode(mode: str) -> None:
   """
   global _timestamp_mode
   if mode not in ("relative", "absolute", "both"):
-    raise ValueError(f"Invalid timestamp mode: {mode}")
+    raise ValueError("Invalid timestamp mode: %s" % mode)
   _timestamp_mode = mode
 
 

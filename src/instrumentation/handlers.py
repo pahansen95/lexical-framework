@@ -30,34 +30,34 @@ def create_print_handler(prefix: str = "", level: Optional[str] = None) -> Calla
     if prefix and not event["type"].startswith(prefix):
       return
 
-    # Format timestamp if present
+    # Format timestamp if present (using % formatting for performance)
     timestamp_str = ""
     if "timestamp_ms" in event:
       # Relative timestamp in milliseconds
-      timestamp_str = f"[{event['timestamp_ms']:>8.1f}ms] "
+      timestamp_str = "[%8.1fms] " % event["timestamp_ms"]
     elif "timestamp" in event:
       # Absolute timestamp in nanoseconds (convert to ms for display)
-      timestamp_str = f"[{event['timestamp'] / 1_000_000:>8.1f}ms] "
+      timestamp_str = "[%8.1fms] " % (event["timestamp"] / 1_000_000)
 
     # Format output
-    output = f"{timestamp_str}{event['type']}: {event['value']}"
+    output = "%s%s: %s" % (timestamp_str, event["type"], event["value"])
     if level:
-      output = f"[{level}] {output}"
+      output = "[%s] %s" % (level, output)
 
     # Add relevant context (exclude standard fields)
     context_items = []
     exclude_keys = {"type", "value", "timestamp", "timestamp_ms"}
     for k, v in event.items():
       if k not in exclude_keys:
-        context_items.append(f"{k}={v}")
+        context_items.append("%s=%s" % (k, v))
 
     if context_items:
-      output += f" ({', '.join(context_items)})"
+      output += " (%s)" % ", ".join(context_items)
 
     print(output)
 
   # Set function name for debugging
-  print_handler.__name__ = f"print_handler(prefix='{prefix}')"
+  print_handler.__name__ = "print_handler(prefix='%s')" % prefix
   return print_handler
 
 
@@ -137,7 +137,7 @@ def create_ring_buffer(size: int = 1000) -> RingBufferHandler:
     """Retrieve all buffered events in chronological order."""
     return list(buffer)
 
-  ring_buffer_handler.__name__ = f"ring_buffer_handler(size={size})"
+  ring_buffer_handler.__name__ = "ring_buffer_handler(size=%d)" % size
   return ring_buffer_handler, get_events
 
 
@@ -166,27 +166,27 @@ def create_file_handler(filepath: str, mode: str = "a", format: str = "json") ->
           # Human-readable format with timestamps
           timestamp_str = ""
           if "timestamp_ms" in event:
-            timestamp_str = f"[{event['timestamp_ms']:>8.1f}ms] "
+            timestamp_str = "[%8.1fms] " % event["timestamp_ms"]
 
-          line = f"{timestamp_str}{event['type']}: {event['value']}"
+          line = "%s%s: %s" % (timestamp_str, event["type"], event["value"])
 
           # Add context
           context_items = []
           exclude_keys = {"type", "value", "timestamp", "timestamp_ms"}
           for k, v in event.items():
             if k not in exclude_keys:
-              context_items.append(f"{k}={v}")
+              context_items.append("%s=%s" % (k, v))
 
           if context_items:
-            line += f" ({', '.join(context_items)})"
+            line += " (%s)" % ", ".join(context_items)
 
           f.write(line + "\n")
 
     except IOError as e:
       if __debug__:
-        print(f"Failed to write to {filepath}: {e}", file=sys.stderr)
+        print("Failed to write to %s: %s" % (filepath, e), file=sys.stderr)
 
-  file_handler.__name__ = f"file_handler('{filepath}')"
+  file_handler.__name__ = "file_handler('%s')" % filepath
   return file_handler
 
 
@@ -206,7 +206,7 @@ def create_conditional_handler(condition: Callable[[Dict[str, Any]], bool], hand
     if condition(event):
       handler(event)
 
-  conditional_handler.__name__ = f"conditional({handler.__name__})"
+  conditional_handler.__name__ = "conditional(%s)" % handler.__name__
   return conditional_handler
 
 
@@ -224,11 +224,11 @@ def create_sampling_handler(rate: float, handler: Callable) -> Callable:
   import random
 
   if not 0.0 <= rate <= 1.0:
-    raise ValueError(f"Sampling rate must be between 0.0 and 1.0, got {rate}")
+    raise ValueError("Sampling rate must be between 0.0 and 1.0, got %s" % rate)
 
   def sampling_handler(event: Dict[str, Any]) -> None:
     if random.random() < rate:
       handler(event)
 
-  sampling_handler.__name__ = f"sampling({rate:.1%}, {handler.__name__})"
+  sampling_handler.__name__ = "sampling(%.1f%%, %s)" % (rate * 100, handler.__name__)
   return sampling_handler
