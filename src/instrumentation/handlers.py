@@ -5,13 +5,15 @@ Provides common event handlers for logging, metrics collection, and debugging.
 These are optional utilities - the core instrumentation module works without them.
 """
 
-from typing import Callable, List, Optional, Tuple
-from collections import defaultdict, deque
-import sys
-import queue
-import threading
+# Standard library
 import atexit
+import queue
+import sys
+import threading
+from collections import defaultdict, deque
+from typing import Any, Callable, List, Optional, TextIO, Tuple
 
+# Local imports
 from .types import EventDict, EventHandler, MetricsDict
 
 # Type aliases for clarity
@@ -36,19 +38,21 @@ def create_print_handler(prefix: str = "", level: Optional[str] = None) -> Event
       return
 
     # Format timestamp if present (using % formatting for performance)
-    timestamp_str = ""
+    timestamp_str: str = ""
     if "timestamp_ms" in event:
       # Relative timestamp in milliseconds
       timestamp_str = "[%8.1fms] " % event["timestamp_ms"]
 
     # Format output
-    output = "%s%s: %s" % (timestamp_str, event["type"], event["value"])
+    output: str = "%s%s: %s" % (timestamp_str, event["type"], event["value"])
     if level:
       output = "[%s] %s" % (level, output)
 
     # Add relevant context (exclude standard fields)
-    context_items = []
-    exclude_keys = {"type", "value", "timestamp", "timestamp_ms"}
+    context_items: List[str] = []
+    exclude_keys: set[str] = {"type", "value", "timestamp", "timestamp_ms"}
+    k: str
+    v: Any
     for k, v in event.items():
       if k not in exclude_keys:
         context_items.append("%s=%s" % (k, v))
@@ -73,8 +77,8 @@ def create_metrics_handler() -> MetricsHandler:
   metrics: MetricsDict = {"counters": defaultdict(int), "durations": defaultdict(list), "values": defaultdict(list)}
 
   def metrics_handler(event: EventDict) -> None:
-    event_type = event["type"]
-    value = event["value"]
+    event_type: str = event["type"]
+    value: Any = event["value"]
 
     # Count all events
     metrics["counters"][event_type] += 1
@@ -92,10 +96,12 @@ def create_metrics_handler() -> MetricsHandler:
     result: MetricsDict = {"counters": dict(metrics["counters"]), "durations": {}, "values": {}}
 
     # Calculate duration stats efficiently
+    name: str
+    values: List[float]
     for name, values in metrics["durations"].items():
       if values:
-        total = sum(values)
-        count = len(values)
+        total: float = sum(values)
+        count: int = len(values)
         result["durations"][name] = {
           "count": count,
           "total": total,
@@ -157,6 +163,7 @@ def create_file_handler(filepath: str, mode: str = "a", format: str = "json") ->
 
   def file_handler(event: EventDict) -> None:
     try:
+      f: TextIO
       with open(filepath, mode) as f:
         if format == "json":
           # Write as JSON for machine readability
@@ -164,15 +171,17 @@ def create_file_handler(filepath: str, mode: str = "a", format: str = "json") ->
           f.write("\n")
         else:
           # Human-readable format with timestamps
-          timestamp_str = ""
+          timestamp_str: str = ""
           if "timestamp_ms" in event:
             timestamp_str = "[%8.1fms] " % event["timestamp_ms"]
 
-          line = "%s%s: %s" % (timestamp_str, event["type"], event["value"])
+          line: str = "%s%s: %s" % (timestamp_str, event["type"], event["value"])
 
           # Add context
-          context_items = []
-          exclude_keys = {"type", "value", "timestamp", "timestamp_ms"}
+          context_items: List[str] = []
+          exclude_keys: set[str] = {"type", "value", "timestamp", "timestamp_ms"}
+          k: str
+          v: Any
           for k, v in event.items():
             if k not in exclude_keys:
               context_items.append("%s=%s" % (k, v))
@@ -206,7 +215,8 @@ def create_conditional_handler(condition: Callable[[EventDict], bool], handler: 
     if condition(event):
       handler(event)
 
-  conditional_handler.__name__ = "conditional(%s)" % getattr(handler, "__name__", "unknown")
+  handler_name: str = getattr(handler, "__name__", "unknown")
+  conditional_handler.__name__ = "conditional(%s)" % handler_name
   return conditional_handler
 
 
@@ -230,7 +240,8 @@ def create_sampling_handler(rate: float, handler: EventHandler) -> EventHandler:
     if random.random() < rate:
       handler(event)
 
-  sampling_handler.__name__ = "sampling(%.1f%%, %s)" % (rate * 100, getattr(handler, "__name__", "unknown"))
+  handler_name: str = getattr(handler, "__name__", "unknown")
+  sampling_handler.__name__ = "sampling(%.1f%%, %s)" % (rate * 100, handler_name)
   return sampling_handler
 
 
@@ -241,22 +252,32 @@ def create_async_handler(handler: EventHandler, maxsize: int = 10000) -> EventHa
   Provides non-blocking event handling with automatic backpressure.
   When the queue is full, oldest events are dropped.
 
+  The handler automatically registers cleanup with atexit to ensure
+  graceful shutdown. For manual cleanup, call handler.shutdown().
+
   Args:
       handler: Synchronous handler to wrap
       maxsize: Maximum queue size
 
   Returns:
-      Async handler function
+      Async handler function with shutdown() method
+
+  Example:
+      >>> async_handler = create_async_handler(file_handler)
+      >>> instrumentation.attach(async_handler)
+      >>> # Events are processed in background
+      >>> # At program exit, cleanup happens automatically
+      >>> # Or manually: async_handler.shutdown()
   """
   event_queue: queue.SimpleQueue[Optional[EventDict]] = queue.SimpleQueue()
-  running = threading.Event()
+  running: threading.Event = threading.Event()
   running.set()
 
-  def process_events():
+  def process_events() -> None:
     """Background thread processing events."""
     while running.is_set() or not event_queue.empty():
       try:
-        event = event_queue.get(timeout=0.1)
+        event: Optional[EventDict] = event_queue.get(timeout=0.1)
         if event is not None:
           handler(event)
       except queue.Empty:
@@ -266,7 +287,7 @@ def create_async_handler(handler: EventHandler, maxsize: int = 10000) -> EventHa
           print("Async handler error: %s" % e, file=sys.stderr)
 
   # Start background thread
-  worker = threading.Thread(target=process_events, daemon=True)
+  worker: threading.Thread = threading.Thread(target=process_events, daemon=True)
   worker.start()
 
   def async_handler(event: EventDict) -> None:
@@ -280,7 +301,7 @@ def create_async_handler(handler: EventHandler, maxsize: int = 10000) -> EventHa
 
     event_queue.put_nowait(event)
 
-  def shutdown():
+  def shutdown() -> None:
     """Graceful shutdown processing remaining events."""
     running.clear()
     # Signal end of events
@@ -291,6 +312,7 @@ def create_async_handler(handler: EventHandler, maxsize: int = 10000) -> EventHa
   # Register cleanup
   atexit.register(shutdown)
 
-  async_handler.__name__ = "async(%s)" % getattr(handler, "__name__", "unknown")
+  handler_name: str = getattr(handler, "__name__", "unknown")
+  async_handler.__name__ = "async(%s)" % handler_name
   async_handler.shutdown = shutdown  # type: ignore
   return async_handler
