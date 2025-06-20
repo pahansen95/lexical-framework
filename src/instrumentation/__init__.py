@@ -10,7 +10,6 @@ Usage:
 
     # Configure behavior
     instrumentation.enable_categories('lex', 'parse')
-    instrumentation.set_timestamp_mode('relative')
 
     # Attach a handler
     instrumentation.attach(instrumentation.create_print_handler())
@@ -33,10 +32,6 @@ from .core import (
   enable_categories,
   disable_categories,
   reset_filters,
-  # Timestamp configuration
-  set_timestamp_mode,
-  # Pool configuration
-  configure_pool,
   # Context management
   set_context,
   increment_depth,
@@ -71,8 +66,6 @@ __all__ = [
   "enable_categories",
   "disable_categories",
   "reset_filters",
-  "set_timestamp_mode",
-  "configure_pool",
   # Context management
   "set_context",
   "increment_depth",
