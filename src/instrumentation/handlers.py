@@ -9,38 +9,42 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from collections import defaultdict, deque
 import sys
 
+MetricsHandler = Tuple[Callable[[Dict[str, Any]], None], Callable[[], Dict[str, Any]]]
+RingBufferHandler = Tuple[Callable[[Dict[str, Any]], None], Callable[[], List[Dict[str, Any]]]]
+
 
 def create_print_handler(prefix: str = "", level: Optional[str] = None) -> Callable:
   """
   Create a handler that prints events to stdout.
-  
+
   Args:
     prefix: Only print events with types starting with this prefix
     level: Optional prefix to prepend to output (e.g. 'DEBUG')
-    
+
   Returns:
     Handler function
   """
+
   def print_handler(event: Dict[str, Any]) -> None:
-    if prefix and not event['type'].startswith(prefix):
+    if prefix and not event["type"].startswith(prefix):
       return
-    
+
     # Format output
     output = f"{event['type']}: {event['value']}"
     if level:
       output = f"[{level}] {output}"
-    
+
     # Add relevant context (exclude standard fields)
     context_items = []
     for k, v in event.items():
-      if k not in ('type', 'value', 'timestamp'):
+      if k not in ("type", "value", "timestamp"):
         context_items.append(f"{k}={v}")
-    
+
     if context_items:
       output += f" ({', '.join(context_items)})"
-    
+
     print(output)
-  
+
   # Set function name for debugging
   print_handler.__name__ = f"print_handler(prefix='{prefix}')"
   return print_handler
@@ -49,63 +53,55 @@ def create_print_handler(prefix: str = "", level: Optional[str] = None) -> Calla
 def create_metrics_handler() -> Tuple[Callable, Callable]:
   """
   Create a handler that aggregates metrics and a function to retrieve them.
-  
+
   Returns:
     (handler, get_metrics) tuple
   """
-  metrics = {
-    'counters': defaultdict(int),
-    'durations': defaultdict(list),
-    'values': defaultdict(list)
-  }
-  
+  metrics = {"counters": defaultdict(int), "durations": defaultdict(list), "values": defaultdict(list)}
+
   def metrics_handler(event: Dict[str, Any]) -> None:
-    event_type = event['type']
-    value = event['value']
-    
+    event_type = event["type"]
+    value = event["value"]
+
     # Count all events
-    metrics['counters'][event_type] += 1
-    
+    metrics["counters"][event_type] += 1
+
     # Aggregate durations
-    if event_type.endswith('.duration'):
-      metrics['durations'][event_type].append(value)
-    
+    if event_type.endswith(".duration"):
+      metrics["durations"][event_type].append(value)
+
     # Collect numeric values
     elif isinstance(value, (int, float)):
-      metrics['values'][event_type].append(value)
-  
+      metrics["values"][event_type].append(value)
+
   def get_metrics() -> Dict[str, Any]:
     """Retrieve aggregated metrics."""
-    result = {'counters': dict(metrics['counters'])}
-    
+    result = {"counters": dict(metrics["counters"])}
+
     # Calculate duration stats efficiently
-    result['durations'] = {}
-    for name, values in metrics['durations'].items():
+    result["durations"] = {}
+    for name, values in metrics["durations"].items():
       if values:
         total = sum(values)
         count = len(values)
-        result['durations'][name] = {
-          'count': count,
-          'total': total,
-          'avg': total / count,
-          'min': min(values),
-          'max': max(values)
+        result["durations"][name] = {
+          "count": count,
+          "total": total,
+          "avg": total / count,
+          "min": min(values),
+          "max": max(values),
         }
-    
+
     # Calculate value stats efficiently
-    result['values'] = {}
-    for name, values in metrics['values'].items():
+    result["values"] = {}
+    for name, values in metrics["values"].items():
       if values:
         total = sum(values)
         count = len(values)
-        result['values'][name] = {
-          'count': count,
-          'sum': total,
-          'avg': total / count
-        }
-    
+        result["values"][name] = {"count": count, "sum": total, "avg": total / count}
+
     return result
-  
+
   metrics_handler.__name__ = "metrics_handler"
   return metrics_handler, get_metrics
 
@@ -113,70 +109,70 @@ def create_metrics_handler() -> Tuple[Callable, Callable]:
 def create_ring_buffer(size: int = 1000) -> Tuple[Callable, Callable]:
   """
   Create a handler that stores recent events in a ring buffer.
-  
+
   Args:
     size: Maximum number of events to store
-    
+
   Returns:
     (handler, get_events) tuple
   """
   buffer = deque(maxlen=size)
-  
+
   def ring_buffer_handler(event: Dict[str, Any]) -> None:
     # Store copy to prevent external mutations
     buffer.append(event.copy())
-  
+
   def get_events() -> List[Dict[str, Any]]:
     """Retrieve all buffered events in chronological order."""
     return list(buffer)
-  
+
   ring_buffer_handler.__name__ = f"ring_buffer_handler(size={size})"
   return ring_buffer_handler, get_events
 
 
-def create_file_handler(filepath: str, mode: str = 'a') -> Callable:
+def create_file_handler(filepath: str, mode: str = "a") -> Callable:
   """
   Create a handler that writes events to a file.
-  
+
   Args:
     filepath: Path to output file
     mode: File open mode ('a' for append, 'w' for overwrite)
-    
+
   Returns:
     Handler function
   """
   import json
-  
+
   def file_handler(event: Dict[str, Any]) -> None:
     try:
       with open(filepath, mode) as f:
         # Write as JSON for machine readability
         json.dump(event, f)
-        f.write('\n')
+        f.write("\n")
     except IOError as e:
       if __debug__:
         print(f"Failed to write to {filepath}: {e}", file=sys.stderr)
-  
+
   file_handler.__name__ = f"file_handler('{filepath}')"
   return file_handler
 
 
-def create_conditional_handler(condition: Callable[[Dict[str, Any]], bool], 
-                             handler: Callable) -> Callable:
+def create_conditional_handler(condition: Callable[[Dict[str, Any]], bool], handler: Callable) -> Callable:
   """
   Create a handler that only processes events matching a condition.
-  
+
   Args:
     condition: Function that returns True for events to process
     handler: Handler to call for matching events
-    
+
   Returns:
     Conditional handler function
   """
+
   def conditional_handler(event: Dict[str, Any]) -> None:
     if condition(event):
       handler(event)
-  
+
   conditional_handler.__name__ = f"conditional({handler.__name__})"
   return conditional_handler
 
@@ -184,22 +180,22 @@ def create_conditional_handler(condition: Callable[[Dict[str, Any]], bool],
 def create_sampling_handler(rate: float, handler: Callable) -> Callable:
   """
   Create a handler that samples events at a given rate.
-  
+
   Args:
     rate: Sampling rate (0.0 to 1.0)
     handler: Handler to call for sampled events
-    
+
   Returns:
     Sampling handler function
   """
   import random
-  
+
   if not 0.0 <= rate <= 1.0:
     raise ValueError(f"Sampling rate must be between 0.0 and 1.0, got {rate}")
-  
+
   def sampling_handler(event: Dict[str, Any]) -> None:
     if random.random() < rate:
       handler(event)
-  
+
   sampling_handler.__name__ = f"sampling({rate:.1%}, {handler.__name__})"
   return sampling_handler

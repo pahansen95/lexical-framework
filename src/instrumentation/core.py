@@ -5,7 +5,9 @@ Provides a minimal interface for emitting events that can be consumed
 by attached handlers for logging, metrics aggregation, or debugging.
 """
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
+from contextlib import contextmanager
+
 import time
 import sys
 import threading
@@ -16,10 +18,11 @@ _lock = threading.Lock()
 
 # Public API
 
+
 def emit(event_type: str, value: Any, **context) -> None:
   """
   Emit an event with optional context.
-  
+
   Args:
     event_type: Dot-notation event identifier (e.g. 'rule.enter')
     value: Primary event value (rule name, duration, token, etc.)
@@ -28,19 +31,14 @@ def emit(event_type: str, value: Any, **context) -> None:
   # Fast path: no work if no handlers (no lock needed for read)
   if not _handlers:
     return
-  
+
   # Create immutable event
-  event = {
-    'type': event_type,
-    'value': value,
-    'timestamp': time.perf_counter_ns(),
-    **context
-  }
-  
+  event = {"type": event_type, "value": value, "timestamp": time.perf_counter_ns(), **context}
+
   # Snapshot handlers to avoid holding lock during dispatch
   with _lock:
     handlers = _handlers.copy()
-  
+
   # Dispatch to handlers - errors logged but never affect caller
   for handler in handlers:
     try:
@@ -55,16 +53,16 @@ def emit(event_type: str, value: Any, **context) -> None:
 def attach(handler: Callable[[Dict[str, Any]], None]) -> None:
   """
   Attach an event handler.
-  
+
   Args:
     handler: Callable that accepts event dictionary
-    
+
   Raises:
     TypeError: If handler is not callable
   """
   if not callable(handler):
     raise TypeError(f"Handler must be callable, got {type(handler).__name__}")
-  
+
   with _lock:
     _handlers.append(handler)
 
@@ -72,7 +70,7 @@ def attach(handler: Callable[[Dict[str, Any]], None]) -> None:
 def detach(handler: Callable[[Dict[str, Any]], None]) -> None:
   """
   Detach an event handler.
-  
+
   Args:
     handler: Previously attached handler
   """
@@ -95,15 +93,11 @@ def get_handler_count() -> int:
     return len(_handlers)
 
 
-# Context managers for common patterns
-
-from contextlib import contextmanager
-
 @contextmanager
 def timed(event_type: str, **context):
   """
   Context manager to time a block of code.
-  
+
   Example:
     with timed('parse.duration', rule='expression'):
       result = parse_expression()
@@ -121,7 +115,7 @@ def timed(event_type: str, **context):
 def traced(enter_type: str, exit_type: str, name: str, **context):
   """
   Context manager to trace entry/exit of a block.
-  
+
   Example:
     with traced('rule.enter', 'rule.exit', 'expression'):
       parse_expression()
