@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from collections import defaultdict, deque
 import sys
 
+# Type aliases for clarity
 MetricsHandler = Tuple[Callable[[Dict[str, Any]], None], Callable[[], Dict[str, Any]]]
 RingBufferHandler = Tuple[Callable[[Dict[str, Any]], None], Callable[[], List[Dict[str, Any]]]]
 
@@ -50,7 +51,7 @@ def create_print_handler(prefix: str = "", level: Optional[str] = None) -> Calla
   return print_handler
 
 
-def create_metrics_handler() -> Tuple[Callable, Callable]:
+def create_metrics_handler() -> MetricsHandler:
   """
   Create a handler that aggregates metrics and a function to retrieve them.
 
@@ -106,7 +107,7 @@ def create_metrics_handler() -> Tuple[Callable, Callable]:
   return metrics_handler, get_metrics
 
 
-def create_ring_buffer(size: int = 1000) -> Tuple[Callable, Callable]:
+def create_ring_buffer(size: int = 1000) -> RingBufferHandler:
   """
   Create a handler that stores recent events in a ring buffer.
 

@@ -7,7 +7,6 @@ by attached handlers for logging, metrics aggregation, or debugging.
 
 from typing import Any, Callable, Dict, List
 from contextlib import contextmanager
-
 import time
 import sys
 import threading
