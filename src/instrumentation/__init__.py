@@ -8,6 +8,10 @@ Architecture:
 Usage:
     import instrumentation
 
+    # Configure behavior
+    instrumentation.enable_categories('lex', 'parse')
+    instrumentation.set_timestamp_mode('relative')
+
     # Attach a handler
     instrumentation.attach(instrumentation.create_print_handler())
 
@@ -16,7 +20,23 @@ Usage:
 """
 
 # Core API
-from .core import emit, attach, detach, clear, get_handler_count, timed, traced
+from .core import (
+  emit,
+  attach,
+  detach,
+  clear,
+  get_handler_count,
+  timed,
+  traced,
+  # Category filtering
+  enable_categories,
+  disable_categories,
+  reset_filters,
+  # Timestamp configuration
+  set_timestamp_mode,
+  # Pool configuration
+  configure_pool,
+)
 
 # Pre-built handlers (optional)
 from .handlers import (
@@ -37,6 +57,12 @@ __all__ = [
   "get_handler_count",
   "timed",
   "traced",
+  # Configuration
+  "enable_categories",
+  "disable_categories",
+  "reset_filters",
+  "set_timestamp_mode",
+  "configure_pool",
   # Handlers
   "create_print_handler",
   "create_metrics_handler",

@@ -30,15 +30,25 @@ def create_print_handler(prefix: str = "", level: Optional[str] = None) -> Calla
     if prefix and not event["type"].startswith(prefix):
       return
 
+    # Format timestamp if present
+    timestamp_str = ""
+    if "timestamp_ms" in event:
+      # Relative timestamp in milliseconds
+      timestamp_str = f"[{event['timestamp_ms']:>8.1f}ms] "
+    elif "timestamp" in event:
+      # Absolute timestamp in nanoseconds (convert to ms for display)
+      timestamp_str = f"[{event['timestamp'] / 1_000_000:>8.1f}ms] "
+
     # Format output
-    output = f"{event['type']}: {event['value']}"
+    output = f"{timestamp_str}{event['type']}: {event['value']}"
     if level:
       output = f"[{level}] {output}"
 
     # Add relevant context (exclude standard fields)
     context_items = []
+    exclude_keys = {"type", "value", "timestamp", "timestamp_ms"}
     for k, v in event.items():
-      if k not in ("type", "value", "timestamp"):
+      if k not in exclude_keys:
         context_items.append(f"{k}={v}")
 
     if context_items:
@@ -131,13 +141,14 @@ def create_ring_buffer(size: int = 1000) -> RingBufferHandler:
   return ring_buffer_handler, get_events
 
 
-def create_file_handler(filepath: str, mode: str = "a") -> Callable:
+def create_file_handler(filepath: str, mode: str = "a", format: str = "json") -> Callable:
   """
   Create a handler that writes events to a file.
 
   Args:
     filepath: Path to output file
     mode: File open mode ('a' for append, 'w' for overwrite)
+    format: Output format ('json' or 'text')
 
   Returns:
     Handler function
@@ -147,9 +158,30 @@ def create_file_handler(filepath: str, mode: str = "a") -> Callable:
   def file_handler(event: Dict[str, Any]) -> None:
     try:
       with open(filepath, mode) as f:
-        # Write as JSON for machine readability
-        json.dump(event, f)
-        f.write("\n")
+        if format == "json":
+          # Write as JSON for machine readability
+          json.dump(event, f)
+          f.write("\n")
+        else:
+          # Human-readable format with timestamps
+          timestamp_str = ""
+          if "timestamp_ms" in event:
+            timestamp_str = f"[{event['timestamp_ms']:>8.1f}ms] "
+
+          line = f"{timestamp_str}{event['type']}: {event['value']}"
+
+          # Add context
+          context_items = []
+          exclude_keys = {"type", "value", "timestamp", "timestamp_ms"}
+          for k, v in event.items():
+            if k not in exclude_keys:
+              context_items.append(f"{k}={v}")
+
+          if context_items:
+            line += f" ({', '.join(context_items)})"
+
+          f.write(line + "\n")
+
     except IOError as e:
       if __debug__:
         print(f"Failed to write to {filepath}: {e}", file=sys.stderr)
