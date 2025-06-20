@@ -5,28 +5,33 @@ Provides common event handlers for logging, metrics collection, and debugging.
 These are optional utilities - the core instrumentation module works without them.
 """
 
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 from collections import defaultdict, deque
 import sys
+import queue
+import threading
+import atexit
+
+from .types import EventDict, EventHandler, MetricsDict
 
 # Type aliases for clarity
-MetricsHandler = Tuple[Callable[[Dict[str, Any]], None], Callable[[], Dict[str, Any]]]
-RingBufferHandler = Tuple[Callable[[Dict[str, Any]], None], Callable[[], List[Dict[str, Any]]]]
+MetricsHandler = Tuple[EventHandler, Callable[[], MetricsDict]]
+RingBufferHandler = Tuple[EventHandler, Callable[[], List[EventDict]]]
 
 
-def create_print_handler(prefix: str = "", level: Optional[str] = None) -> Callable:
+def create_print_handler(prefix: str = "", level: Optional[str] = None) -> EventHandler:
   """
   Create a handler that prints events to stdout.
 
   Args:
-    prefix: Only print events with types starting with this prefix
-    level: Optional prefix to prepend to output (e.g. 'DEBUG')
+      prefix: Only print events with types starting with this prefix
+      level: Optional prefix to prepend to output (e.g. 'DEBUG')
 
   Returns:
-    Handler function
+      Handler function
   """
 
-  def print_handler(event: Dict[str, Any]) -> None:
+  def print_handler(event: EventDict) -> None:
     if prefix and not event["type"].startswith(prefix):
       return
 
@@ -35,9 +40,6 @@ def create_print_handler(prefix: str = "", level: Optional[str] = None) -> Calla
     if "timestamp_ms" in event:
       # Relative timestamp in milliseconds
       timestamp_str = "[%8.1fms] " % event["timestamp_ms"]
-    elif "timestamp" in event:
-      # Absolute timestamp in nanoseconds (convert to ms for display)
-      timestamp_str = "[%8.1fms] " % (event["timestamp"] / 1_000_000)
 
     # Format output
     output = "%s%s: %s" % (timestamp_str, event["type"], event["value"])
@@ -66,11 +68,11 @@ def create_metrics_handler() -> MetricsHandler:
   Create a handler that aggregates metrics and a function to retrieve them.
 
   Returns:
-    (handler, get_metrics) tuple
+      (handler, get_metrics) tuple
   """
-  metrics = {"counters": defaultdict(int), "durations": defaultdict(list), "values": defaultdict(list)}
+  metrics: MetricsDict = {"counters": defaultdict(int), "durations": defaultdict(list), "values": defaultdict(list)}
 
-  def metrics_handler(event: Dict[str, Any]) -> None:
+  def metrics_handler(event: EventDict) -> None:
     event_type = event["type"]
     value = event["value"]
 
@@ -85,12 +87,11 @@ def create_metrics_handler() -> MetricsHandler:
     elif isinstance(value, (int, float)):
       metrics["values"][event_type].append(value)
 
-  def get_metrics() -> Dict[str, Any]:
+  def get_metrics() -> MetricsDict:
     """Retrieve aggregated metrics."""
-    result = {"counters": dict(metrics["counters"])}
+    result: MetricsDict = {"counters": dict(metrics["counters"]), "durations": {}, "values": {}}
 
     # Calculate duration stats efficiently
-    result["durations"] = {}
     for name, values in metrics["durations"].items():
       if values:
         total = sum(values)
@@ -104,7 +105,6 @@ def create_metrics_handler() -> MetricsHandler:
         }
 
     # Calculate value stats efficiently
-    result["values"] = {}
     for name, values in metrics["values"].items():
       if values:
         total = sum(values)
@@ -122,18 +122,18 @@ def create_ring_buffer(size: int = 1000) -> RingBufferHandler:
   Create a handler that stores recent events in a ring buffer.
 
   Args:
-    size: Maximum number of events to store
+      size: Maximum number of events to store
 
   Returns:
-    (handler, get_events) tuple
+      (handler, get_events) tuple
   """
-  buffer = deque(maxlen=size)
+  buffer: deque[EventDict] = deque(maxlen=size)
 
-  def ring_buffer_handler(event: Dict[str, Any]) -> None:
+  def ring_buffer_handler(event: EventDict) -> None:
     # Store copy to prevent external mutations
     buffer.append(event.copy())
 
-  def get_events() -> List[Dict[str, Any]]:
+  def get_events() -> List[EventDict]:
     """Retrieve all buffered events in chronological order."""
     return list(buffer)
 
@@ -141,21 +141,21 @@ def create_ring_buffer(size: int = 1000) -> RingBufferHandler:
   return ring_buffer_handler, get_events
 
 
-def create_file_handler(filepath: str, mode: str = "a", format: str = "json") -> Callable:
+def create_file_handler(filepath: str, mode: str = "a", format: str = "json") -> EventHandler:
   """
   Create a handler that writes events to a file.
 
   Args:
-    filepath: Path to output file
-    mode: File open mode ('a' for append, 'w' for overwrite)
-    format: Output format ('json' or 'text')
+      filepath: Path to output file
+      mode: File open mode ('a' for append, 'w' for overwrite)
+      format: Output format ('json' or 'text')
 
   Returns:
-    Handler function
+      Handler function
   """
   import json
 
-  def file_handler(event: Dict[str, Any]) -> None:
+  def file_handler(event: EventDict) -> None:
     try:
       with open(filepath, mode) as f:
         if format == "json":
@@ -190,45 +190,107 @@ def create_file_handler(filepath: str, mode: str = "a", format: str = "json") ->
   return file_handler
 
 
-def create_conditional_handler(condition: Callable[[Dict[str, Any]], bool], handler: Callable) -> Callable:
+def create_conditional_handler(condition: Callable[[EventDict], bool], handler: EventHandler) -> EventHandler:
   """
   Create a handler that only processes events matching a condition.
 
   Args:
-    condition: Function that returns True for events to process
-    handler: Handler to call for matching events
+      condition: Function that returns True for events to process
+      handler: Handler to call for matching events
 
   Returns:
-    Conditional handler function
+      Conditional handler function
   """
 
-  def conditional_handler(event: Dict[str, Any]) -> None:
+  def conditional_handler(event: EventDict) -> None:
     if condition(event):
       handler(event)
 
-  conditional_handler.__name__ = "conditional(%s)" % handler.__name__
+  conditional_handler.__name__ = "conditional(%s)" % getattr(handler, "__name__", "unknown")
   return conditional_handler
 
 
-def create_sampling_handler(rate: float, handler: Callable) -> Callable:
+def create_sampling_handler(rate: float, handler: EventHandler) -> EventHandler:
   """
   Create a handler that samples events at a given rate.
 
   Args:
-    rate: Sampling rate (0.0 to 1.0)
-    handler: Handler to call for sampled events
+      rate: Sampling rate (0.0 to 1.0)
+      handler: Handler to call for sampled events
 
   Returns:
-    Sampling handler function
+      Sampling handler function
   """
   import random
 
   if not 0.0 <= rate <= 1.0:
     raise ValueError("Sampling rate must be between 0.0 and 1.0, got %s" % rate)
 
-  def sampling_handler(event: Dict[str, Any]) -> None:
+  def sampling_handler(event: EventDict) -> None:
     if random.random() < rate:
       handler(event)
 
-  sampling_handler.__name__ = "sampling(%.1f%%, %s)" % (rate * 100, handler.__name__)
+  sampling_handler.__name__ = "sampling(%.1f%%, %s)" % (rate * 100, getattr(handler, "__name__", "unknown"))
   return sampling_handler
+
+
+def create_async_handler(handler: EventHandler, maxsize: int = 10000) -> EventHandler:
+  """
+  Create an async handler that processes events in a background thread.
+
+  Provides non-blocking event handling with automatic backpressure.
+  When the queue is full, oldest events are dropped.
+
+  Args:
+      handler: Synchronous handler to wrap
+      maxsize: Maximum queue size
+
+  Returns:
+      Async handler function
+  """
+  event_queue: queue.SimpleQueue[Optional[EventDict]] = queue.SimpleQueue()
+  running = threading.Event()
+  running.set()
+
+  def process_events():
+    """Background thread processing events."""
+    while running.is_set() or not event_queue.empty():
+      try:
+        event = event_queue.get(timeout=0.1)
+        if event is not None:
+          handler(event)
+      except queue.Empty:
+        continue
+      except Exception as e:
+        if __debug__:
+          print("Async handler error: %s" % e, file=sys.stderr)
+
+  # Start background thread
+  worker = threading.Thread(target=process_events, daemon=True)
+  worker.start()
+
+  def async_handler(event: EventDict) -> None:
+    """Fast enqueue with drop-on-full behavior."""
+    # Drop oldest if full (ring buffer behavior)
+    if event_queue.qsize() >= maxsize:
+      try:
+        event_queue.get_nowait()  # Drop oldest
+      except queue.Empty:
+        pass
+
+    event_queue.put_nowait(event)
+
+  def shutdown():
+    """Graceful shutdown processing remaining events."""
+    running.clear()
+    # Signal end of events
+    event_queue.put(None)
+    # Wait for processing to complete (with timeout)
+    worker.join(timeout=5.0)
+
+  # Register cleanup
+  atexit.register(shutdown)
+
+  async_handler.__name__ = "async(%s)" % getattr(handler, "__name__", "unknown")
+  async_handler.shutdown = shutdown  # type: ignore
+  return async_handler

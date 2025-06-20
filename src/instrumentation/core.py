@@ -5,12 +5,14 @@ Provides a minimal interface for emitting events that can be consumed
 by attached handlers for logging, metrics aggregation, or debugging.
 """
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, List, Optional, Dict
 from contextlib import contextmanager
 import time
 import sys
 import threading
 import contextvars
+
+from .types import EventDict, EventHandler
 
 # Capture module import time for relative timestamps
 _START_TIME_NS = time.perf_counter_ns()
@@ -25,9 +27,11 @@ current_file = contextvars.ContextVar("current_file", default=None)
 class InstrumentationState:
   """Encapsulates all mutable instrumentation state."""
 
+  __slots__ = ("handlers", "handlers_lock", "filter_mode", "filter_categories", "category_cache")
+
   def __init__(self):
     # Handler management
-    self.handlers: List[Callable[[Dict[str, Any]], None]] = []
+    self.handlers: List[EventHandler] = []
     self.handlers_lock = threading.Lock()
 
     # Category filtering
@@ -55,8 +59,8 @@ def set_context(**kwargs):
   Temporarily set context variables.
 
   Example:
-    with set_context(trace_id='abc123', current_file='test.py'):
-      emit('parse.start', 'beginning parse')
+      with set_context(trace_id='abc123', current_file='test.py'):
+          emit('parse.start', 'beginning parse')
   """
   tokens = []
   old_values = {}
@@ -83,8 +87,8 @@ def increment_depth():
   Context manager to track parse depth.
 
   Example:
-    with increment_depth():
-      parse_expression()  # depth automatically incremented
+      with increment_depth():
+          parse_expression()  # depth automatically incremented
   """
   current = parse_depth.get()
   token = parse_depth.set(current + 1)
@@ -100,9 +104,9 @@ def parsing_rule(rule_name: str):
   Context manager to track current parsing rule.
 
   Example:
-    with parsing_rule('expression'):
-      # Events emitted here will include rule='expression'
-      parse_expression_impl()
+      with parsing_rule('expression'):
+          # Events emitted here will include rule='expression'
+          parse_expression_impl()
   """
   token = current_rule.set(rule_name)
   try:
@@ -121,9 +125,9 @@ def emit(event_type: str, value: Any, **context) -> None:
   Context variables are automatically included in the event.
 
   Args:
-    event_type: Dot-notation event identifier (e.g. 'rule.enter')
-    value: Primary event value (rule name, duration, token, etc.)
-    **context: Additional key-value context
+      event_type: Dot-notation event identifier (e.g. 'rule.enter')
+      value: Primary event value (rule name, duration, token, etc.)
+      **context: Additional key-value context
   """
   # Fast path: no work if no handlers
   if not _state.handlers:
@@ -137,8 +141,8 @@ def emit(event_type: str, value: Any, **context) -> None:
     elif _state.filter_mode == "block" and category in _state.filter_categories:
       return
 
-  # Build event
-  event = {
+  # Build event as TypedDict
+  event: EventDict = {
     "type": event_type,
     "value": value,
     "timestamp_ms": _get_timestamp_ms(),
@@ -159,7 +163,8 @@ def emit(event_type: str, value: Any, **context) -> None:
     event["file"] = file
 
   # Add explicit context (can override automatic)
-  event.update(context)
+  for key, val in context.items():
+    event[key] = val  # type: ignore
 
   # Snapshot handlers to avoid holding lock during dispatch
   with _state.handlers_lock:
@@ -172,19 +177,19 @@ def emit(event_type: str, value: Any, **context) -> None:
     except Exception as e:
       if __debug__:
         # In debug mode, log handler errors to stderr
-        print("Handler error in %s: %s" % (handler.__name__, e), file=sys.stderr)
+        print("Handler error in %s: %s" % (getattr(handler, "__name__", "unknown"), e), file=sys.stderr)
       # Continue processing other handlers
 
 
-def attach(handler: Callable[[Dict[str, Any]], None]) -> None:
+def attach(handler: EventHandler) -> None:
   """
   Attach an event handler.
 
   Args:
-    handler: Callable that accepts event dictionary
+      handler: Callable that accepts event dictionary
 
   Raises:
-    TypeError: If handler is not callable
+      TypeError: If handler is not callable
   """
   if not callable(handler):
     raise TypeError("Handler must be callable, got %s" % type(handler).__name__)
@@ -193,12 +198,12 @@ def attach(handler: Callable[[Dict[str, Any]], None]) -> None:
     _state.handlers.append(handler)
 
 
-def detach(handler: Callable[[Dict[str, Any]], None]) -> None:
+def detach(handler: EventHandler) -> None:
   """
   Detach an event handler.
 
   Args:
-    handler: Previously attached handler
+      handler: Previously attached handler
   """
   with _state.handlers_lock:
     try:
@@ -249,8 +254,8 @@ def timed(event_type: str, **context):
   Context manager to time a block of code.
 
   Example:
-    with timed('parse.duration', rule='expression'):
-      result = parse_expression()
+      with timed('parse.duration', rule='expression'):
+          result = parse_expression()
   """
   start = time.perf_counter_ns()
   try:
@@ -267,8 +272,8 @@ def traced(enter_type: str, exit_type: str, name: str, **context):
   Context manager to trace entry/exit of a block.
 
   Example:
-    with traced('rule.enter', 'rule.exit', 'expression'):
-      parse_expression()
+      with traced('rule.enter', 'rule.exit', 'expression'):
+          parse_expression()
   """
   emit(enter_type, name, **context)
   try:
