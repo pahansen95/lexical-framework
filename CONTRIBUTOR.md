@@ -2,7 +2,7 @@
 
 > This document describes expectations of developers, provides development frameworks, establishes directives on coding conventions, offers opinionated recommendations on developer environments, and concludes with further reading for contributor success.
 
-## What is Good?
+## What is Good Code?
 
 > *“Simplicity is prerequisite for reliability.” — Edsger W. Dijkstra*
 
@@ -45,7 +45,7 @@ Embodying these principles keeps the codebase pliable, reliable and a pleasure t
 
 ---
 
-## How to Develop Good
+## Writing Good Code
 
 > *“Process without principles is bureaucracy; principles without process is wishful thinking.” — Mark Schwartz*
 
@@ -91,7 +91,7 @@ Use this process to materialize & validate your mental models. Source code is on
 
 Use this process to inform what comes next. Favor automation & fast feedback to increase the time you spend articulating & implementing. If the gap is conceptual, loop to *Articulate*; if it’s execution, loop to *Implement*. Iterate until you have "good" code. If you feel the process isn't working, then challenge your approach. If accrued technical debt is a burden, then pay it down. If there is no gap, then congratulations, you're done... for now.
 
-## Coding Conventions
+## Good *Python* Coding Conventions
 
 Python code must be correct, simple, and performant. These conventions are requirements for all contributions. Violations block merge approval.
 
@@ -145,6 +145,12 @@ class Config:
     __slots__ = ('host', 'port')  # Required for >1000 instances
     host: str
     port: int
+
+# MAY use for structured data frequently created/destroyed
+class Config(TypedDict):
+    host: str
+    port: int
+  
 ```
 
 **Required State Management**:
@@ -297,6 +303,7 @@ Code organization must follow these patterns to ensure maintainability.
 #### Mandatory Patterns
 
 **Required Module Structure**:
+
 ```python
 # feature.py - MUST follow this order
 
@@ -329,7 +336,7 @@ __all__ = ['public_function', 'DEFAULT_TIMEOUT']
 # MUST start as single module
 auth.py
 
-# MUST convert to package when >300 lines
+# SHOULD convert to package when >300 lines
 auth/
   __init__.py      # Public exports only
   core.py          # Implementation
@@ -393,17 +400,22 @@ text = ''.join(parts)       # REQUIRED over += loop
 total = sum(numbers)        # REQUIRED over manual loop
 found = any(condition(x) for x in items)  # Short-circuits
 
-# 3. MUST use __slots__ for frequently instantiated classes
+# 3. MAY use __slots__ or TypedDicts for frequently instantiated classes
 class Token:
     __slots__ = ('type', 'value', 'position')  # Saves 37% memory
+
+class Token(TypedDict):
+  ...
     
 # 4. MUST use appropriate concurrency
-# I/O-bound: asyncio required
+# I/O-bound: asyncio (preferred) or threading required
 async def fetch_all(urls):
     async with aiohttp.ClientSession() as session:
         return await asyncio.gather(
             *[fetch(session, url) for url in urls]
         )
+
+# TODO: Concurrency Thread ExecPool Example
 
 # CPU-bound: multiprocessing required
 def parallel_compute(data):
@@ -559,7 +571,7 @@ log.debug(f"Result: {expensive_compute()}")  # FORBIDDEN
 log.debug("Result: %s", expensive_compute)   # Use lazy %
 ```
 
-## Environment & Tooling
+## Project Environment & Tooling
 
 > Fill in as necessary
 
