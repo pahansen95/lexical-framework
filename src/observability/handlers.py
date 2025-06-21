@@ -1,9 +1,32 @@
 """
 Handler implementations and composition utilities.
 
-Provides pre-built handlers for common observability patterns and utilities
-for composing custom handlers. All handlers follow the EventHandler protocol
-and can be combined through wrapping and filtering.
+This module provides the building blocks for processing events emitted by the
+observability system. Handlers transform the raw event stream into useful outputs
+through formatting, aggregation, filtering, and export.
+
+Mental Model:
+Handlers are event processors that form a pipeline. Like Unix pipes, simple
+handlers combine to create sophisticated processing chains. Each handler does
+one thing well - format text, write files, aggregate statistics, or filter noise.
+
+Key Concepts:
+- Handler: Function that processes EventDict instances
+- Composition: Handlers wrap or chain to build complex behavior
+- Filtering: Conditional handlers process selective events
+- Buffering: Async handlers decouple emission from processing
+
+Design Principles:
+- Single responsibility per handler
+- Composable through standard patterns
+- Non-blocking event processing
+- Graceful error handling
+
+Performance Characteristics:
+- Synchronous handlers block emission (use for critical paths)
+- Async handlers add ~100ns queue overhead
+- Sampling reduces data volume linearly
+- Buffer handlers trade memory for latency
 """
 
 import atexit
