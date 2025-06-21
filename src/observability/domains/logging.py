@@ -83,15 +83,19 @@ When enabled, performance costs include:
 The logging domain transforms familiar logging patterns into a powerful event stream, enabling sophisticated observability workflows while maintaining the simplicity developers expect.
 """
 
-from typing import Any, Dict, Final, Optional
+import os
+import sys
+import time
 import weakref
+from typing import Any, Dict, Final, Optional, TextIO
 
 from ..core import emit, has_handlers
+from ..types import EventDict, EventHandler
 
-# Event schema
+# Event type prefix for all logging events
 LOG_PREFIX: Final[str] = "log"
 
-# Severity levels
+# Severity levels as numeric thresholds
 CRITICAL: Final[int] = 50
 ERROR: Final[int] = 40
 WARNING: Final[int] = 30
@@ -100,51 +104,54 @@ DEBUG: Final[int] = 10
 NOTSET: Final[int] = 0
 
 # Pre-computed event types for performance
-LOG_CRITICAL: Final[str] = f"{LOG_PREFIX}.{CRITICAL}"
-LOG_ERROR: Final[str] = f"{LOG_PREFIX}.{ERROR}"
-LOG_WARNING: Final[str] = f"{LOG_PREFIX}.{WARNING}"
-LOG_INFO: Final[str] = f"{LOG_PREFIX}.{INFO}"
-LOG_DEBUG: Final[str] = f"{LOG_PREFIX}.{DEBUG}"
+EVENT_TYPES: Final[Dict[int, str]] = {
+  CRITICAL: f"{LOG_PREFIX}.{CRITICAL}",
+  ERROR: f"{LOG_PREFIX}.{ERROR}",
+  WARNING: f"{LOG_PREFIX}.{WARNING}",
+  INFO: f"{LOG_PREFIX}.{INFO}",
+  DEBUG: f"{LOG_PREFIX}.{DEBUG}",
+}
 
-# Map severity to event type
-_SEVERITY_TO_EVENT: Final[Dict[int, str]] = {
-  CRITICAL: LOG_CRITICAL,
-  ERROR: LOG_ERROR,
-  WARNING: LOG_WARNING,
-  INFO: LOG_INFO,
-  DEBUG: LOG_DEBUG,
+# Human-readable severity names
+LEVEL_NAMES: Final[Dict[int, str]] = {
+  CRITICAL: "CRITICAL",
+  ERROR: "ERROR",
+  WARNING: "WARNING",
+  INFO: "INFO",
+  DEBUG: "DEBUG",
 }
 
 # Logger hierarchy storage
-_loggers: Dict[str, "Logger"] = {}
-_root_logger: Optional["Logger"] = None
+_registry: Dict[str, "Logger"] = {}
+_root: Optional["Logger"] = None
 
 
 class Logger:
   """
-  Hierarchical logger with severity-based filtering.
+  Hierarchical event emitter with severity-based filtering.
 
   Loggers form a dot-separated hierarchy where children inherit
-  configuration from parents unless explicitly set.
+  configuration from parents. Events emit only when severity
+  thresholds are met, ensuring zero overhead for disabled levels.
   """
 
   __slots__ = ("name", "level", "_parent_ref")
 
   def __init__(self, name: str, parent: Optional["Logger"] = None):
     """
-    Initialize logger.
+    Initialize logger within hierarchy.
 
     Args:
-        name: Logger name (dot-separated hierarchy)
+        name: Dot-separated hierarchical name
         parent: Parent logger for configuration inheritance
     """
     self.name = name
-    self.level = NOTSET  # Inherit from parent by default
+    self.level = NOTSET
     self._parent_ref = weakref.ref(parent) if parent else None
 
   @property
   def effective_level(self) -> int:
-    """Get effective level considering hierarchy."""
+    """Resolve effective severity threshold through hierarchy."""
     if self.level != NOTSET:
       return self.level
 
@@ -152,150 +159,202 @@ class Logger:
     if parent:
       return parent.effective_level
 
-    return WARNING  # Default when no parent
+    return WARNING  # Default threshold
 
   def set_level(self, level: int) -> None:
-    """
-    Set logger severity threshold.
-
-    Args:
-        level: Minimum severity for message emission
-    """
+    """Configure severity threshold for this logger."""
     self.level = level
 
   def is_enabled_for(self, level: int) -> bool:
-    """Check if severity level is enabled."""
-    if not has_handlers():
-      return False
-    return level >= self.effective_level
+    """
+    Check if severity level would emit an event.
+
+    Zero-cost rejection path when no handlers attached.
+    """
+    return has_handlers() and level >= self.effective_level
 
   def log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
     """
-    Log message at specified severity.
+    Emit log event at specified severity.
+
+    Message formatting occurs only when severity threshold is met,
+    providing lazy evaluation for performance.
 
     Args:
-        level: Message severity
-        msg: Message template (% formatting)
+        level: Numeric severity level
+        msg: Message template using % formatting
         *args: Positional arguments for template
         **kwargs: Extra fields added to event
     """
     if not self.is_enabled_for(level):
       return
 
-    # Get pre-computed event type
-    event_type = _SEVERITY_TO_EVENT.get(level, f"{LOG_PREFIX}.{level}")
-
-    # Format message lazily
+    # Lazy message formatting
     if args:
       try:
         message = msg % args
       except (TypeError, ValueError) as e:
-        # Formatting error - log the template and args
-        message = f"Log format error: {msg} % {args!r} - {e}"
+        message = f"Format error: {msg!r} % {args!r} - {e}"
     else:
       message = msg
 
     # Emit structured event
+    event_type = EVENT_TYPES.get(level, f"{LOG_PREFIX}.{level}")
     emit(event_type, message, logger=self.name, level=level, template=msg, args=args, **kwargs)
 
   def debug(self, msg: str, *args: Any, **kwargs: Any) -> None:
-    """Log debug message."""
+    """Emit debug-level event."""
     self.log(DEBUG, msg, *args, **kwargs)
 
   def info(self, msg: str, *args: Any, **kwargs: Any) -> None:
-    """Log info message."""
+    """Emit info-level event."""
     self.log(INFO, msg, *args, **kwargs)
 
   def warning(self, msg: str, *args: Any, **kwargs: Any) -> None:
-    """Log warning message."""
+    """Emit warning-level event."""
     self.log(WARNING, msg, *args, **kwargs)
 
   def error(self, msg: str, *args: Any, **kwargs: Any) -> None:
-    """Log error message."""
+    """Emit error-level event."""
     self.log(ERROR, msg, *args, **kwargs)
 
   def critical(self, msg: str, *args: Any, **kwargs: Any) -> None:
-    """Log critical message."""
+    """Emit critical-level event."""
     self.log(CRITICAL, msg, *args, **kwargs)
 
 
 def get_logger(name: str = "") -> Logger:
   """
-  Get or create logger by name.
+  Retrieve or create logger within hierarchy.
 
-  Creates a hierarchical logger structure where child loggers
-  inherit configuration from parents.
+  Logger hierarchy uses dot notation where children inherit
+  configuration from ancestors. Empty string returns root logger.
 
   Args:
-      name: Logger name (empty string for root logger)
+      name: Hierarchical logger name
 
   Returns:
       Logger instance
   """
-  global _root_logger
+  global _root
 
-  # Root logger special case
+  # Root logger singleton
   if not name:
-    if _root_logger is None:
-      _root_logger = Logger("")
-      _loggers[""] = _root_logger
-    return _root_logger
+    if _root is None:
+      _root = Logger("")
+      _registry[""] = _root
+    return _root
 
   # Return existing logger
-  if name in _loggers:
-    return _loggers[name]
+  if name in _registry:
+    return _registry[name]
 
-  # Find parent by traversing hierarchy
+  # Find parent through hierarchy traversal
   parent = None
   parts = name.split(".")
 
-  # Search for nearest parent
   for i in range(len(parts) - 1, -1, -1):
     parent_name = ".".join(parts[:i])
-    if parent_name in _loggers:
-      parent = _loggers[parent_name]
+    if parent_name in _registry:
+      parent = _registry[parent_name]
       break
 
-  # Use root as parent if no other parent found
+  # Default to root if no parent found
   if parent is None:
-    parent = get_logger("")  # Get or create root
+    parent = get_logger("")
 
-  # Create new logger
+  # Create and register logger
   logger = Logger(name, parent)
-  _loggers[name] = logger
+  _registry[name] = logger
   return logger
 
 
-def create_log_formatter(
-  format: str = "%(timestamp)s [%(level)s] %(logger)s: %(message)s", timestamp_format: str = "relative"
-) -> Any:
+# Color support for formatters
+class Colors:
+  """ANSI escape sequences for terminal formatting."""
+
+  # Colors
+  RED = "\033[91m"
+  YELLOW = "\033[93m"
+  GREEN = "\033[92m"
+  BLUE = "\033[94m"
+  CYAN = "\033[96m"
+  GRAY = "\033[90m"
+
+  # Styles
+  BOLD = "\033[1m"
+  DIM = "\033[2m"
+
+  # Reset
+  RESET = "\033[0m"
+
+
+def _supports_color(stream: TextIO = sys.stdout) -> bool:
   """
-  Create a formatting handler for log events.
+  Detect terminal color support.
+
+  Respects NO_COLOR environment variable and checks terminal
+  capabilities across platforms.
+  """
+  if os.environ.get("NO_COLOR"):
+    return False
+
+  if not hasattr(stream, "isatty") or not stream.isatty():
+    return False
+
+  term = os.environ.get("TERM", "")
+  if term == "dumb":
+    return False
+
+  if sys.platform == "win32":
+    return os.environ.get("ANSICON") or "WT_SESSION" in os.environ
+
+  return True
+
+
+def formatter(
+  format: str = "%(timestamp)s [%(level)s] %(logger)s: %(message)s",
+  *,
+  timestamp_format: str = "relative",
+  colorize: Optional[bool] = None,
+  stream: TextIO = sys.stdout,
+) -> EventHandler:
+  """
+  Create log event formatter with optional color support.
+
+  Formats log events for human consumption with configurable
+  timestamp formats and automatic color detection.
 
   Args:
-      format: Message format template
-      timestamp_format: 'relative' for ms since start, 'absolute' for wall clock
+      format: Template with %(field)s placeholders
+      timestamp_format: "relative" (ms since start) or "absolute" (wall clock)
+      colorize: Enable colors (None=auto-detect)
+      stream: Output stream for color detection
 
   Returns:
       Event handler that formats log events
   """
-  # Level names for formatting
-  level_names = {
-    CRITICAL: "CRITICAL",
-    ERROR: "ERROR",
-    WARNING: "WARNING",
-    INFO: "INFO",
-    DEBUG: "DEBUG",
+  # Auto-detect color support
+  if colorize is None:
+    colorize = _supports_color(stream)
+
+  # Color mappings for severity levels
+  level_colors = {
+    CRITICAL: Colors.RED + Colors.BOLD,
+    ERROR: Colors.RED,
+    WARNING: Colors.YELLOW,
+    INFO: Colors.GREEN,
+    DEBUG: Colors.CYAN,
   }
 
-  def format_handler(event: Dict[str, Any]) -> None:
-    # Only process log events
+  def handler(event: EventDict) -> None:
+    # Filter non-log events
     if not event["type"].startswith(LOG_PREFIX):
       return
 
-    # Extract fields
+    # Extract event fields
     level = event.get("level", 0)
-    logger = event.get("logger", "root")
+    logger_name = event.get("logger", "root")
     message = event["value"]
 
     # Format timestamp
@@ -303,31 +362,82 @@ def create_log_formatter(
       timestamp_ns = event.get("timestamp_ns", 0)
       timestamp = f"{timestamp_ns / 1_000_000:.1f}ms"
     else:
-      import time
-
       timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
 
-    # Build format dict
+    # Apply colors if enabled
+    if colorize:
+      timestamp = f"{Colors.GRAY}{timestamp}{Colors.RESET}"
+      logger_name = f"{Colors.BLUE}{logger_name}{Colors.RESET}"
+
+      level_name = LEVEL_NAMES.get(level, f"LEVEL{level}")
+      level_color = level_colors.get(level, "")
+      level_str = f"{level_color}{level_name}{Colors.RESET}"
+    else:
+      level_str = LEVEL_NAMES.get(level, f"LEVEL{level}")
+
+    # Build format dictionary
     format_dict = {
       "timestamp": timestamp,
-      "level": level_names.get(level, f"LEVEL{level}"),
-      "logger": logger,
+      "level": level_str,
+      "logger": logger_name,
       "message": message,
     }
 
-    # Format and print
+    # Apply template and output
     try:
       output = format % format_dict
-    except (KeyError, ValueError):
-      output = f"Format error: {format!r} with {format_dict!r}"
+    except (KeyError, ValueError) as e:
+      output = f"Format error: {format!r} - {e}"
 
-    print(output)
+    print(output, file=stream)
 
-  format_handler.__name__ = f"log_formatter({format!r})"
-  return format_handler
+  handler.__name__ = f"log_formatter(colorize={colorize})"
+  return handler
 
 
-# Public exports
+def minimal_formatter(*, colorize: Optional[bool] = None) -> EventHandler:
+  """
+  Create minimal formatter for development use.
+
+  Shows only severity and message for reduced visual noise.
+  """
+  return formatter(format="%(level)s: %(message)s", colorize=colorize)
+
+
+def json_formatter(*, stream: TextIO = sys.stdout) -> EventHandler:
+  """
+  Create structured JSON formatter.
+
+  Outputs newline-delimited JSON for machine processing.
+  """
+  import json
+
+  def handler(event: EventDict) -> None:
+    if not event["type"].startswith(LOG_PREFIX):
+      return
+
+    # Convert to JSON-serializable format
+    output = {
+      "timestamp": event.get("timestamp_ns", 0) / 1_000_000,
+      "level": LEVEL_NAMES.get(event.get("level", 0), "UNKNOWN"),
+      "logger": event.get("logger", "root"),
+      "message": event["value"],
+    }
+
+    # Add extra fields
+    for key, value in event.items():
+      if key not in {"type", "value", "timestamp_ns", "level", "logger", "template", "args"}:
+        output[key] = value
+
+    json.dump(output, stream, default=str)
+    stream.write("\n")
+    stream.flush()
+
+  handler.__name__ = "json_formatter"
+  return handler
+
+
+# Public API
 __all__ = [
   # Logger access
   "get_logger",
@@ -339,6 +449,8 @@ __all__ = [
   "INFO",
   "DEBUG",
   "NOTSET",
-  # Handlers
-  "create_log_formatter",
+  # Formatters
+  "formatter",
+  "minimal_formatter",
+  "json_formatter",
 ]
