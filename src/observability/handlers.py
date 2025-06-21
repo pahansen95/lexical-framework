@@ -71,7 +71,7 @@ def create_textio_handler(
 
       # Custom formatting to stderr
       def format_error(event):
-          return f"ERROR: {event['value']}\n"
+          return f"ERROR: {event['value']}\\n"
       handler = create_textio_handler(sys.stderr, format_error, prefix='log.40')
   """
 
@@ -98,7 +98,7 @@ def create_textio_handler(
       if __debug__:
         # Attempt to log error without recursion
         try:
-          sys.stderr.write(f"TextIO handler error: {e}\n")
+          sys.stderr.write(f"TextIO handler error: {e}\\n")
         except Exception:
           pass  # Give up silently
 
