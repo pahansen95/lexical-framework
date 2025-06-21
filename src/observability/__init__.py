@@ -1,28 +1,61 @@
 """
-Observability package for zero-overhead instrumentation.
+# Observability Package
 
-Provides unified event emission infrastructure with specialized domains for
-logging, tracing, and metrics. Designed for minimal performance impact when
-disabled and efficient operation when enabled.
+A unified event emission infrastructure that provides zero-overhead instrumentation for logging, tracing, and metrics collection. The package implements a tree-based event dispatch system where telemetry data flows through a central pipeline to multiple, independent handlers.
 
-Basic Usage:
-    from observability import emit, attach, logging
+## Architecture
 
-    # Attach a handler
-    attach(create_print_handler())
+The observability system separates event production from consumption through a publish-subscribe model:
 
-    # Use specialized domains
-    logger = logging.get_logger('myapp')
-    logger.info('Application started')
+```
+Application Code
+    ↓ emit()
+Core Event System
+    ↓ dispatch
+Handler Tree
+    ├─→ Logging Handler → File/Console
+    ├─→ Metrics Handler → Aggregation/Export
+    └─→ Trace Handler   → Span Collection
+```
 
-    with tracing.span('operation'):
-        metrics.Counter('requests').increment()
+This separation enables flexible telemetry collection where the same event can be processed differently by multiple handlers without coupling the event source to specific destinations.
 
-Core Concepts:
-    - Events flow through a central pipeline
-    - Handlers process events asynchronously
-    - Domains provide specialized APIs
-    - Zero overhead when no handlers attached
+## Core Concepts
+
+**Events**: Immutable records containing typed data, timestamps, and contextual metadata that flow through the system.
+
+**Domains**: Specialized APIs (logging, tracing, metrics) that translate high-level operations into structured events.
+
+**Handlers**: Event consumers organized in a tree structure that process events independently with isolated error handling.
+
+**Zero-Overhead**: When no handlers are attached, the entire system reduces to a single boolean check, ensuring production code pays no performance penalty for unused instrumentation.
+
+## Design Principles
+
+- **Unified Pipeline**: All telemetry flows through one event system
+- **Domain Separation**: Each observability concern has its own intuitive API
+- **Handler Composition**: Complex processing built from simple, focused handlers
+- **Fail-Safe Operation**: Handler errors never affect event emission or other handlers
+- **Context Propagation**: Automatic correlation through ambient context variables
+
+## Basic Usage
+
+```python
+from observability import attach, logging, tracing, metrics
+
+# Attach handlers to process events
+attach(create_file_handler('app.log'))
+attach(create_metrics_aggregator())
+
+# Use domain APIs to emit events
+logger = logging.get_logger('myapp')
+logger.info('Application started')
+
+with tracing.span('process_request'):
+    metrics.Counter('requests').increment()
+```
+
+The package provides a foundation for comprehensive observability while maintaining simplicity and performance in production systems.
 """
 
 from typing import Any

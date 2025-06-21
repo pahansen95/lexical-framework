@@ -1,14 +1,86 @@
 """
-Logging domain for structured message recording.
+# Logging Domain
 
-The logging domain provides hierarchical loggers with severity-based filtering.
-Events are emitted only when the severity meets the configured threshold, ensuring
-zero overhead for disabled log levels.
+A structured message recording system that translates traditional log calls into events flowing through the observability pipeline. The domain provides hierarchical loggers with severity-based filtering while maintaining zero overhead for disabled log levels.
 
-Key concepts:
-- Logger: Named message emitter with severity threshold
-- Severity: Numeric level indicating message importance
-- Hierarchy: Child loggers inherit configuration from parents
+## Mental Model
+
+The logging domain acts as an event producer that converts log operations into structured events:
+
+```
+Logger API Call → Event Generation → Handler Tree Processing
+                                          ├─→ File (all messages)
+                                          ├─→ Alert (errors only)
+                                          └─→ Metrics (count by level)
+```
+
+This separation enables sophisticated log processing where the same log message can be simultaneously written to files, trigger alerts, update dashboards, or feed analytics systems - all without the logger knowing or caring about these destinations.
+
+## Architecture
+
+Loggers form a dot-separated hierarchy that mirrors application structure:
+
+```
+root
+├── app
+│   ├── app.database
+│   ├── app.cache
+│   └── app.api
+└── library
+    └── library.parser
+```
+
+Child loggers inherit configuration from parents, enabling granular control over log verbosity across different subsystems.
+
+## Key Concepts
+
+**Logger Hierarchy**: Named loggers that inherit thresholds from ancestors, allowing centralized configuration with local overrides.
+
+**Severity Levels**: Numeric thresholds that control event emission:
+- CRITICAL (50): System failures requiring immediate attention
+- ERROR (40): Recoverable failures affecting operations
+- WARNING (30): Concerning but non-critical conditions
+- INFO (20): Standard operational messages
+- DEBUG (10): Detailed diagnostic information
+
+**Lazy Evaluation**: Message formatting occurs only when the severity threshold is met, eliminating string construction overhead for disabled levels.
+
+**Structured Events**: Log calls generate events with consistent schema:
+```python
+{
+    "type": "log.{severity}",     # Pre-computed for performance
+    "value": formatted_message,    # Final formatted string
+    "logger": logger_name,         # Hierarchical name
+    "level": numeric_level,        # For filtering
+    "template": format_string,     # Original template
+    "args": positional_args,       # Template arguments
+    **context_variables,           # Automatic enrichment
+    **extra_fields                 # User-provided metadata
+}
+```
+
+## Performance Characteristics
+
+The domain achieves zero overhead through threshold pre-filtering:
+
+```python
+if not logger.is_enabled_for(level):
+    return  # No event construction or formatting
+```
+
+When enabled, performance costs include:
+- Severity check: ~10ns
+- Event construction: ~100ns
+- String formatting: Variable based on complexity
+
+## Design Principles
+
+- **Hierarchical Control**: Configure once at the root, override where needed
+- **Zero-Cost Filtering**: Disabled levels incur only a numeric comparison
+- **Fail-Safe Formatting**: Template errors produce diagnostic messages, not crashes
+- **Transparent Context**: Automatic inclusion of trace IDs and request context
+
+The logging domain transforms familiar logging patterns into a powerful event stream, enabling sophisticated observability workflows while maintaining the simplicity developers expect.
 """
 
 from typing import Any, Dict, Final, Optional
