@@ -11,6 +11,8 @@ import queue
 import sys
 import threading
 import time
+import json
+import random
 from collections import deque
 from typing import Callable, Deque, List, Optional, TextIO, TypedDict
 from typing_extensions import NotRequired
@@ -72,7 +74,6 @@ def create_textio_handler(
           return f"ERROR: {event['value']}\n"
       handler = create_textio_handler(sys.stderr, format_error, prefix='log.40')
   """
-  import json
 
   # Default formatter: JSON lines
   if format_fn is None:
@@ -164,7 +165,6 @@ def create_file_handler(filepath: str, mode: str = "a", encoding: str = "utf-8",
   Returns:
       Handler that writes events to file
   """
-  import json
 
   def file_handler(event: EventDict) -> None:
     try:
@@ -340,7 +340,6 @@ def create_sampling_handler(rate: float, handler: EventHandler, seed: Optional[i
   Returns:
       Sampling handler
   """
-  import random
 
   if not 0.0 <= rate <= 1.0:
     raise ValueError(f"Sampling rate must be between 0.0 and 1.0, got {rate}")
