@@ -8,23 +8,23 @@
 
 Every healthy codebase shares a small set of enduring qualities.  This guide opens with them so that every contributor—from first‑time committer to long‑term maintainer—starts with the same mental model and vocabulary.
 
-### 1 Correctness is non‑negotiable
+### 1 — Correctness is non‑negotiable
 
 Our first duty is to ship behaviour that faithfully matches user‑visible intent and internal contracts. Tests, static checks and—where stakes demand—formal proofs are the guard‑rails.  If the behaviour is wrong, nothing else buys redemption.
 
-### 2 Simplicity beats cleverness
+### 2 — Simplicity beats cleverness
 
 We seek the *least* complicated design that solves today’s need while leaving tomorrow unobstructed. Prefer clear data structures and straight‑line logic to intricate abstractions; embrace YAGNI and delete dead paths early.
 
-### 3 Readability enables change
+### 3 — Readability enables change
 
 Code is a long‑lived conversation between authors. Names should reveal intent; control flow should read top‑to‑bottom; modules should have single, obvious responsibilities. If an unfamiliar engineer cannot reason about a unit in minutes, refactor or document until they can.
 
-### 4 Fitness for purpose
+### 4 — Fitness for purpose
 
 Quality lives in context: throughput matters in services, determinism in analytics, robustness in safety‑critical paths. Meet the non‑functional constraints that matter—and prove it with measurements, not intuition.
 
-### 5 Sustainable maintainability
+### 5 — Sustainable maintainability
 
 Every PR must make the future easier, never harder. We budget time for refactoring, guard against technical debt, and keep build, test and deploy feedback loops fast. A patch that adds value today at the cost of tomorrow’s velocity is not “done”.
 
@@ -224,7 +224,7 @@ The mental model: Define clear contracts, enforce them at boundaries, then opera
 
 Type annotations and validation are mandatory at all boundaries.
 
-### Mandatory Patterns
+#### Mandatory Patterns
 
 **Required Boundary Validation**:
 ```python
@@ -267,7 +267,7 @@ except Exception as e:
     raise  # CORRECT: preserves stack trace
 ```
 
-### Forbidden Patterns
+#### Forbidden Patterns
 
 ```python
 # NEVER enforce types at runtime
@@ -344,7 +344,7 @@ auth/
   _internal.py     # Private (underscore required)
 ```
 
-### Forbidden Patterns
+#### Forbidden Patterns
 
 ```python
 # NEVER create deep hierarchies (>3 levels)
@@ -451,7 +451,7 @@ else:                           # > 1GB: Specialized tools
     raise ValueError("Use specialized tools for data >1GB")
 ```
 
-### Forbidden Patterns
+#### Forbidden Patterns
 
 ```python
 # NEVER micro-optimize without profiling
@@ -556,7 +556,7 @@ import atexit
 atexit.register(listener.stop)
 ```
 
-### Forbidden Patterns
+#### Forbidden Patterns
 
 ```python
 # NEVER log in tight loops without guards
