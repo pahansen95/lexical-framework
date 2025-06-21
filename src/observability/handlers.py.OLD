@@ -106,6 +106,12 @@ class ManagedFileHandler:
   with configurable flushing behavior.
   """
 
+  __slots__ = (
+    'filepath', 'format', 'mode', 'encoding',
+    'flush_interval', 'flush_time',
+    '_file', '_lock', '_event_count', '_last_flush'
+  )
+
   def __init__(
     self,
     filepath: str,
@@ -208,6 +214,9 @@ class BufferHandler:
 
   Provides both handler interface and buffer access methods.
   """
+
+  __slots__ = ('max_size', 'overflow_policy', '_events', '_lock', '_start_index')
+
 
   def __init__(self, max_size: int = 1000, overflow_policy: str = "ring"):
     """
