@@ -289,6 +289,50 @@ class Parseable(Protocol):
 - 80% minimum of internal functions that cross module boundaries
 - 0% required for single-use private helpers
 
+**Required Protocol Usage**:
+```python
+from typing import Protocol, runtime_checkable
+
+# Define behavior contracts with Protocols
+class Cacheable(Protocol):
+    """Contract for objects that can be cached"""
+    def cache_key(self) -> str: ...
+    def ttl_seconds(self) -> int: ...
+
+class Repository(Protocol):
+    """Contract for data access patterns"""
+    def find(self, id: str) -> Entity | None: ...
+    def save(self, entity: Entity) -> None: ...
+
+# Runtime validation when needed
+@runtime_checkable
+class Serializable(Protocol):
+    def to_dict(self) -> dict[str, Any]: ...
+    def from_dict(cls, data: dict[str, Any]) -> Self: ...
+
+# Usage: Accept protocols, not concrete types
+def cache_entity(item: Cacheable, cache: Cache) -> None:
+    """Works with any object implementing Cacheable protocol"""
+    cache.set(item.cache_key(), item, ttl=item.ttl_seconds())
+
+# Testing: Simple protocol satisfaction
+class MockRepository:
+    """No inheritance required"""
+    def find(self, id: str) -> Entity | None:
+        return None
+    
+    def save(self, entity: Entity) -> None:
+        pass
+
+# Type checker confirms MockRepository satisfies Repository protocol
+```
+
+Prefer Protocols when:
+- Defining contracts between components
+- Multiple implementations exist
+- Testing requires mock objects
+- Avoiding inheritance hierarchies
+
 **Required Error Patterns**:
 ```python
 # MUST let errors propagate naturally
@@ -323,6 +367,47 @@ class Service:
         self.config = config
         self.deps = deps
 ```
+
+**Required Two-Phase Initialization**:
+```python
+# Pattern for configurable components that support multiple instances
+
+class DatabaseEngine:
+    """Two-phase initialization for flexible configuration"""
+    
+    def __init__(self):
+        # Phase 1: Create unconfigured instance
+        self._pool = None
+        self._config = None
+        self._initialized = False
+    
+    def initialize(self, config: DatabaseConfig) -> None:
+        # Phase 2: Configure with specific settings
+        if self._initialized:
+            raise RuntimeError("Already initialized")
+        
+        self._config = config
+        self._pool = create_pool(config)
+        self._initialized = True
+    
+    def query(self, sql: str) -> Result:
+        if not self._initialized:
+            raise RuntimeError("Not initialized")
+        return self._pool.execute(sql)
+
+# Usage pattern for frameworks
+engine = DatabaseEngine()  # Lightweight creation
+engine.initialize(production_config)  # Explicit configuration
+
+# Enables testing with different configs
+test_engine = DatabaseEngine()
+test_engine.initialize(test_config)
+```
+
+Use two-phase initialization when:
+- Components need multiple configurations (test/prod)
+- Framework extensions require delayed configuration
+- Circular dependency resolution is needed
 
 #### Forbidden Patterns
 
