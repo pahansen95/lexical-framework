@@ -9,6 +9,7 @@ Core Components:
 - Event emission for tokens, rules, and AST nodes
 - Source fragment extraction for debugging
 - Zero-overhead design when no handlers attached
+- Null object pattern for disabled observability
 
 Design Principles:
 - Progressive disclosure (simple defaults, advanced options)
@@ -19,9 +20,9 @@ Design Principles:
 
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, ContextManager
 from collections.abc import Mapping
 from observability import ObservabilityContext, SharedContext
 
@@ -67,6 +68,60 @@ class Position:
       )
 
 
+class NullLexicalContext:
+  """
+  No-op implementation for disabled observability.
+
+  Provides zero-overhead observability operations when no handlers
+  are attached. All methods are minimal no-ops to ensure the fastest
+  possible execution path.
+  """
+
+  def has_handlers(self) -> bool:
+    """Always returns False for null context."""
+    return False
+
+  def emit_token(self, token_type: str, value: str, position: Optional[Position] = None) -> None:
+    """No-op token emission."""
+    pass
+
+  def emit_search_start(self, position: Position) -> None:
+    """No-op search start event."""
+    pass
+
+  def emit_backtrack(self, rule: str, reason: str) -> None:
+    """No-op backtrack event."""
+    pass
+
+  def emit_error(self, message: str, position: Optional[Position] = None) -> None:
+    """No-op error event."""
+    pass
+
+  def emit_event(self, event_type: str, value: Any = None, **metadata) -> None:
+    """No-op generic event emission."""
+    pass
+
+  def rule(self, name: str, position: Optional[Position] = None) -> ContextManager:
+    """Return null context manager for rule tracking."""
+    return nullcontext()
+
+  def state_change(self, state_name: str, old_value: Any, new_value: Any) -> None:
+    """No-op state change event."""
+    pass
+
+  def emit_state_transition(self, from_state: str, to_state: str) -> None:
+    """No-op state transition event."""
+    pass
+
+  def emit_ast_node(self, node_type: str, attributes: Mapping[str, Any], position: Optional[Position] = None) -> None:
+    """No-op AST node event."""
+    pass
+
+
+# Singleton null context for zero allocation overhead
+_null_context = NullLexicalContext()
+
+
 class LexicalContext:
   """
   Observability context for lexical analysis operations.
@@ -109,6 +164,11 @@ class LexicalContext:
       # Lightweight object for single-threaded mode
       self._local = type("LocalStorage", (), {"parse_stack": [], "rule_timings": []})()
 
+  @staticmethod
+  def null() -> "LexicalContext":
+    """Return singleton null context for zero-overhead operation."""
+    return _null_context
+
   @property
   def _parse_stack(self) -> list[str]:
     """Access thread-local parse stack."""
@@ -122,6 +182,10 @@ class LexicalContext:
     if not hasattr(self._local, "rule_timings"):
       self._local.rule_timings = []
     return self._local.rule_timings
+
+  def has_handlers(self) -> bool:
+    """Check if any handlers are attached."""
+    return self._context.has_handlers()
 
   @contextmanager
   def rule(self, name: str, position: Optional[Position] = None):
@@ -211,6 +275,19 @@ class LexicalContext:
 
     self._context.emit_event(LEX_TOKEN_EMIT, value, **metadata)
 
+  def emit_search_start(self, position: Position) -> None:
+    """
+    Emit token search start event.
+
+    Args:
+        position: Current position in source
+    """
+    if not self._context.has_handlers():
+      return
+
+    metadata = {"position": position}
+    self._context.emit_event("lex.search.start", None, **metadata)
+
   def emit_backtrack(self, rule: str, reason: str) -> None:
     """
     Emit parser backtrack event.
@@ -230,6 +307,37 @@ class LexicalContext:
       metadata["parse_depth"] = len(stack)
 
     self._context.emit_event(PARSE_BACKTRACK, reason, **metadata)
+
+  def emit_error(self, message: str, position: Optional[Position] = None) -> None:
+    """
+    Emit error event with context.
+
+    Args:
+        message: Error message
+        position: Optional error position
+    """
+    if not self._context.has_handlers():
+      return
+
+    metadata = {"error": message}
+    if position:
+      metadata["position"] = position
+
+    self._context.emit_event("error", message, **metadata)
+
+  def emit_event(self, event_type: str, value: Any = None, **metadata) -> None:
+    """
+    Emit generic event.
+
+    Args:
+        event_type: Event classification
+        value: Event value
+        **metadata: Additional event metadata
+    """
+    if not self._context.has_handlers():
+      return
+
+    self._context.emit_event(event_type, value, **metadata)
 
   def emit_ast_node(self, node_type: str, attributes: Mapping[str, Any], position: Optional[Position] = None) -> None:
     """
@@ -275,6 +383,22 @@ class LexicalContext:
 
     value = f"{from_state} -> {to_state}"
     self._context.emit_event(LEX_STATE_TRANSITION, value, **metadata)
+
+  def state_change(self, state_name: str, old_value: Any, new_value: Any) -> None:
+    """
+    Emit state change event.
+
+    Args:
+        state_name: Name of state variable
+        old_value: Previous value
+        new_value: New value
+    """
+    if not self._context.has_handlers():
+      return
+
+    metadata = {"state_name": state_name, "old_value": old_value, "new_value": new_value}
+
+    self._context.emit_event("state.change", state_name, **metadata)
 
   def _extract_fragment(self, position: Position) -> str:
     """
@@ -332,6 +456,7 @@ class LexicalContext:
 __all__ = [
   # Context classes
   "LexicalContext",
+  "NullLexicalContext",
   "Position",
   # Lexer events
   "LEX_TOKEN_EMIT",

@@ -1,174 +1,218 @@
 """
-Immutable syntax tree infrastructure with structural sharing.
+Immutable syntax tree construction and navigation.
 
-Implements frozen nodes for persistence, view facades for navigation,
-and builder patterns for incremental construction of thread-safe trees.
+Provides frozen tree data structures and builder patterns for creating
+immutable syntax trees with efficient structural sharing.
 """
 
-from dataclasses import dataclass
-from typing import Optional, List, Tuple, Union, Any, Iterator
 import weakref
+from dataclasses import dataclass
+from typing import Any, List, Optional, Union, Iterator, Tuple, Dict
+from .tokenize import Token
+from .observe import LexicalContext, Position as ObsPosition
 
 
-# ===== Frozen Layer (Immutable Structure) =====
+# ===== Frozen Data Structures =====
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class FrozenToken:
-  """Immutable token representation"""
+  """Immutable token in syntax tree."""
 
-  kind: str
-  text: str
-  width: int
+  __slots__ = ("type", "value", "pos", "line", "column")
+
+  type: str
+  value: str
+  pos: int
   line: int
   column: int
 
   @classmethod
-  def from_lex_token(cls, token) -> "FrozenToken":
-    """Create from lexer token"""
-    return cls(kind=token.type, text=token.value, width=len(token.value), line=token.line, column=token.column)
+  def from_lex_token(cls, token: Token) -> "FrozenToken":
+    """Create from lexer token."""
+    return cls(type=token.type, value=token.value, pos=token.pos, line=token.line, column=token.column)
 
 
+@dataclass(frozen=True)
 class FrozenNode:
-  """Immutable node with structural sharing"""
+  """Immutable internal node in syntax tree."""
 
-  __slots__ = ("kind", "children", "_width", "_hash")
+  __slots__ = ("kind", "children")
 
-  def __init__(self, kind: str, children: Tuple[Union["FrozenNode", FrozenToken], ...]):
-    self.kind = kind
-    self.children = children
-    self._width = None
-    self._hash = None
+  kind: str
+  children: tuple[Union["FrozenNode", FrozenToken], ...]
 
-  @property
-  def width(self) -> int:
-    if self._width is None:
-      self._width = sum(c.width for c in self.children)
-    return self._width
-
-  def __hash__(self) -> int:
-    if self._hash is None:
-      self._hash = hash((self.kind, self.children))
-    return self._hash
-
-  def __eq__(self, other) -> bool:
-    return isinstance(other, FrozenNode) and self.kind == other.kind and self.children == other.children
+  def __len__(self) -> int:
+    """Total node count including self."""
+    return 1 + sum(len(c) if isinstance(c, FrozenNode) else 1 for c in self.children)
 
 
-# ===== View Layer (Navigation Facade) =====
+# Union type for tree elements
+FrozenElement = Union[FrozenNode, FrozenToken]
+
+
+# ===== View Layer =====
 
 
 class NodeView:
-  """Navigation facade over frozen nodes"""
+  """
+  Lazy view over frozen tree nodes.
 
-  __slots__ = ("_frozen", "_parent_ref", "_position", "_cached_children", "_index", "__weakref__")
+  Provides navigation and query methods without modifying
+  the underlying frozen structure.
+  """
 
-  def __init__(
-    self, frozen: Union[FrozenNode, FrozenToken], parent: Optional["NodeView"] = None, position: int = 0, index: int = 0
-  ):
+  __slots__ = ("_frozen", "_parent_ref", "_index", "_child_views")
+
+  def __init__(self, frozen: FrozenElement, parent: Optional["NodeView"] = None, index: int = 0):
     self._frozen = frozen
     self._parent_ref = weakref.ref(parent) if parent else None
-    self._position = position
     self._index = index
-    self._cached_children = None
+    self._child_views: Optional[List["NodeView"]] = None
 
   @property
   def kind(self) -> str:
-    return self._frozen.kind
-
-  @property
-  def parent(self) -> Optional["NodeView"]:
-    return self._parent_ref() if self._parent_ref else None
-
-  @property
-  def position(self) -> int:
-    return self._position
-
-  @property
-  def width(self) -> int:
-    return self._frozen.width
-
-  @property
-  def end_position(self) -> int:
-    return self._position + self.width
+    """Node type or token type."""
+    if isinstance(self._frozen, FrozenNode):
+      return self._frozen.kind
+    else:
+      return self._frozen.type
 
   @property
   def is_token(self) -> bool:
+    """Check if this is a token."""
     return isinstance(self._frozen, FrozenToken)
 
   @property
   def text(self) -> Optional[str]:
-    return self._frozen.text if self.is_token else None
+    """Token text if applicable."""
+    if isinstance(self._frozen, FrozenToken):
+      return self._frozen.value
+    return None
 
   @property
-  def line(self) -> Optional[int]:
-    return self._frozen.line if self.is_token else None
+  def position(self) -> Optional[ObsPosition]:
+    """Source position if token."""
+    if isinstance(self._frozen, FrozenToken):
+      return ObsPosition(line=self._frozen.line, column=self._frozen.column, offset=self._frozen.pos)
+    return None
 
   @property
-  def column(self) -> Optional[int]:
-    return self._frozen.column if self.is_token else None
+  def parent(self) -> Optional["NodeView"]:
+    """Parent node if any."""
+    return self._parent_ref() if self._parent_ref else None
 
   @property
   def children(self) -> List["NodeView"]:
-    if self._cached_children is None and not self.is_token:
-      self._cached_children = []
-      pos = self._position
-      for i, child in enumerate(self._frozen.children):
-        view = NodeView(child, self, pos, i)
-        self._cached_children.append(view)
-        pos += child.width
-    return self._cached_children or []
+    """Child nodes (cached)."""
+    if self._child_views is None:
+      if isinstance(self._frozen, FrozenNode):
+        self._child_views = [NodeView(child, self, i) for i, child in enumerate(self._frozen.children)]
+      else:
+        self._child_views = []
+    return self._child_views
 
-  def child(self, index: int) -> Optional["NodeView"]:
-    """Get child at index"""
-    children = self.children
-    return children[index] if 0 <= index < len(children) else None
-
-  def find_at_position(self, pos: int) -> Optional["NodeView"]:
-    """Find deepest node containing position"""
-    if not (self.position <= pos < self.end_position):
+  def find_at_position(self, position: int) -> Optional["NodeView"]:
+    """Find deepest node containing position."""
+    if self.is_token:
+      token = self._frozen
+      if token.pos <= position < token.pos + len(token.value):
+        return self
       return None
 
+    # Check children
     for child in self.children:
-      if result := child.find_at_position(pos):
+      if result := child.find_at_position(position):
         return result
+    return None
 
-    return self
+  def find_all(self, kind: str) -> List["NodeView"]:
+    """Find all nodes of given kind."""
+    results = []
+
+    def search(node: NodeView):
+      if node.kind == kind:
+        results.append(node)
+      for child in node.children:
+        search(child)
+
+    search(self)
+    return results
+
+  def walk(self) -> Iterator["NodeView"]:
+    """Walk all nodes depth-first."""
+    yield self
+    for child in self.children:
+      yield from child.walk()
+
+  def path_to_root(self) -> List["NodeView"]:
+    """Get path from this node to root."""
+    path = []
+    node = self
+    while node:
+      path.append(node)
+      node = node.parent
+    return list(reversed(path))
+
+  def replace_children(self, new_children: List[FrozenElement]) -> FrozenNode:
+    """Create new node with replaced children."""
+    if self.is_token:
+      raise ValueError("Cannot replace children of token")
+    return FrozenNode(self.kind, tuple(new_children))
 
 
 # ===== Builder Pattern =====
 
 
+@dataclass
 class TreeBuilder:
-  """Constructs frozen trees incrementally"""
+  """
+  Builds immutable syntax trees with structural sharing.
 
-  def __init__(self):
-    self._stack = [[]]
-    self._token_cache = {}
-    self._node_cache = {}
-    self._cache_limit = 3
+  Optionally integrates with observability for AST node events.
+  """
+
+  def __init__(self, obs_context: Optional[LexicalContext] = None):
+    """
+    Initialize builder with optional observability.
+
+    Args:
+        obs_context: Optional observability context for AST events
+    """
+    self._obs = obs_context or LexicalContext.null()
+    self._stack: List[List[FrozenElement]] = [[]]
+    self._node_cache: Dict[Tuple, FrozenNode] = {}
+    self._token_cache: Dict[Tuple, FrozenToken] = {}
+    self._cache_limit = 100
 
   def start_node(self, kind: str) -> "TreeBuilder":
-    """Begin new node"""
+    """Begin building a new node."""
     self._stack.append([])
     return self
 
-  def add_token(self, token) -> "TreeBuilder":
-    """Add token with interning"""
-    key = (token.type, token.value)
+  def add_token(self, token: Token) -> "TreeBuilder":
+    """Add token with caching."""
+    # Create cache key
+    key = (token.type, token.value, token.pos, token.line, token.column)
+
     if key not in self._token_cache:
-      self._token_cache[key] = FrozenToken.from_lex_token(token)
+      frozen = FrozenToken.from_lex_token(token)
+      self._token_cache[key] = frozen
+
+      # Emit AST token event if observing
+      if self._obs.has_handlers():
+        self._obs.emit_ast_node("token", {"type": token.type, "value": token.value}, token.position)
 
     self._stack[-1].append(self._token_cache[key])
     return self
 
-  def add_frozen(self, element: Union[FrozenNode, FrozenToken]) -> "TreeBuilder":
-    """Add pre-built element"""
+  def add_frozen(self, element: FrozenElement) -> "TreeBuilder":
+    """Add pre-built element."""
     self._stack[-1].append(element)
     return self
 
   def finish_node(self, kind: str) -> "TreeBuilder":
-    """Complete current node with caching"""
+    """Complete current node with caching."""
     if len(self._stack) <= 1:
       raise ValueError("No node to finish")
 
@@ -185,17 +229,25 @@ class TreeBuilder:
     else:
       node = FrozenNode(kind, children)
 
+    # Emit AST node event if observing
+    if self._obs.has_handlers():
+      self._obs.emit_ast_node(
+        kind,
+        {"child_count": len(children)},
+        None,  # Internal nodes don't have position
+      )
+
     self._stack[-1].append(node)
     return self
 
   def abandon_node(self) -> "TreeBuilder":
-    """Cancel current node"""
+    """Cancel current node."""
     if len(self._stack) > 1:
       self._stack.pop()
     return self
 
   def build(self) -> FrozenNode:
-    """Get final tree"""
+    """Get final tree."""
     if len(self._stack) != 1:
       raise ValueError(f"Unclosed nodes: {len(self._stack) - 1}")
     if len(self._stack[0]) != 1:
@@ -206,53 +258,62 @@ class TreeBuilder:
       raise TypeError("Root must be FrozenNode")
     return root
 
+  # Context manager support
+  def node(self, kind: str):
+    """Context manager for node building."""
+
+    class NodeContext:
+      def __init__(self, builder: TreeBuilder, kind: str):
+        self.builder = builder
+        self.kind = kind
+
+      def __enter__(self):
+        self.builder.start_node(self.kind)
+        return self.builder
+
+      def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+          self.builder.finish_node(self.kind)
+        else:
+          self.builder.abandon_node()
+        return False
+
+    return NodeContext(self, kind)
+
 
 # ===== High-Level API =====
 
 
 class SyntaxTree:
-  """User-facing tree interface"""
+  """User-facing tree interface with thread-safe view caching."""
 
   def __init__(self, frozen_root: FrozenNode):
+    if not isinstance(frozen_root, FrozenNode):
+      raise TypeError("Root must be FrozenNode")
     self._frozen_root = frozen_root
     self._root_view = None
 
   @property
   def root(self) -> NodeView:
-    """Get root view"""
+    """Get root view (cached)."""
     if self._root_view is None:
       self._root_view = NodeView(self._frozen_root)
     return self._root_view
 
   def find_at_position(self, position: int) -> Optional[NodeView]:
-    """Find node at character position"""
+    """Find node at character position."""
     return self.root.find_at_position(position)
 
   def find_all(self, kind: str) -> List[NodeView]:
-    """Find all nodes of given kind"""
-    results = []
-
-    def search(node: NodeView):
-      if node.kind == kind:
-        results.append(node)
-      for child in node.children:
-        search(child)
-
-    search(self.root)
-    return results
+    """Find all nodes of given kind."""
+    return self.root.find_all(kind)
 
   def walk(self) -> Iterator[NodeView]:
-    """Walk all nodes depth-first"""
-
-    def traverse(node: NodeView):
-      yield node
-      for child in node.children:
-        yield from traverse(child)
-
-    return traverse(self.root)
+    """Walk all nodes depth-first."""
+    return self.root.walk()
 
   def dump(self, indent: int = 0) -> str:
-    """Debug representation"""
+    """Debug representation."""
 
     def dump_node(node: NodeView, level: int) -> str:
       prefix = "  " * level
@@ -266,38 +327,42 @@ class SyntaxTree:
 
     return dump_node(self.root, indent)
 
+  def __len__(self) -> int:
+    """Total node count."""
+    return len(self._frozen_root)
+
 
 # ===== Visitor Pattern =====
 
 
 class TreeVisitor:
-  """Base visitor for tree traversal"""
+  """Base visitor for tree traversal."""
 
   def visit(self, node: NodeView) -> Any:
-    """Dispatch to specific visitor method"""
+    """Dispatch to specific visitor method."""
     method_name = f"visit_{node.kind}"
     method = getattr(self, method_name, self.generic_visit)
     return method(node)
 
   def generic_visit(self, node: NodeView) -> Any:
-    """Default: visit all children"""
+    """Default: visit all children."""
     for child in node.children:
       self.visit(child)
 
 
 class TreeTransformer(TreeVisitor):
-  """Base transformer creating new trees"""
+  """Base transformer creating new trees."""
 
   def __init__(self):
     self.builder = TreeBuilder()
 
   def transform(self, tree: SyntaxTree) -> SyntaxTree:
-    """Transform entire tree"""
+    """Transform entire tree."""
     frozen = self._transform_node(tree.root)
     return SyntaxTree(frozen)
 
-  def _transform_node(self, node: NodeView) -> Union[FrozenNode, FrozenToken]:
-    """Transform single node"""
+  def _transform_node(self, node: NodeView) -> FrozenElement:
+    """Transform single node."""
     if node.is_token:
       return node._frozen
 
@@ -305,72 +370,7 @@ class TreeTransformer(TreeVisitor):
     children = []
     for child in node.children:
       transformed = self._transform_node(child)
-      if transformed:  # Allow filtering
+      if transformed:
         children.append(transformed)
 
     return FrozenNode(node.kind, tuple(children))
-
-
-# ===== Tree Utilities =====
-
-
-def tree_diff(tree1: SyntaxTree, tree2: SyntaxTree) -> List[Tuple[str, NodeView, Optional[NodeView]]]:
-  """Find differences between two trees"""
-  differences = []
-
-  def compare_nodes(node1: NodeView, node2: Optional[NodeView], path: str = ""):
-    if node2 is None:
-      differences.append(("removed", node1, None))
-      return
-
-    if node1.kind != node2.kind:
-      differences.append(("changed", node1, node2))
-      return
-
-    if node1.is_token:
-      if node1.text != node2.text:
-        differences.append(("changed", node1, node2))
-    else:
-      # Compare children
-      children1 = node1.children
-      children2 = node2.children
-
-      for i, child1 in enumerate(children1):
-        if i < len(children2):
-          compare_nodes(child1, children2[i], f"{path}/{i}")
-        else:
-          differences.append(("removed", child1, None))
-
-      for i in range(len(children1), len(children2)):
-        differences.append(("added", None, children2[i]))
-
-  compare_nodes(tree1.root, tree2.root)
-  return differences
-
-
-def cst_to_ast(tree: SyntaxTree, structural_kinds: set = None) -> SyntaxTree:
-  """Remove structural tokens from CST"""
-  if structural_kinds is None:
-    structural_kinds = {"WHITESPACE", "COMMENT", "NEWLINE"}
-
-  class ASTBuilder(TreeTransformer):
-    def _transform_node(self, node: NodeView) -> Optional[Union[FrozenNode, FrozenToken]]:
-      # Skip structural tokens
-      if node.kind in structural_kinds:
-        return None
-
-      if node.is_token:
-        return node._frozen
-
-      # Transform children
-      children = []
-      for child in node.children:
-        if transformed := self._transform_node(child):
-          children.append(transformed)
-
-      if not children:
-        return None
-
-      return FrozenNode(node.kind, tuple(children))
-
-  return ASTBuilder().transform(tree)

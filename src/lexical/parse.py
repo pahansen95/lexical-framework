@@ -1,35 +1,37 @@
 """
-Recursive descent parsing framework with frozen tree construction.
+Recursive descent parsing framework with integrated observability.
 
 Provides parser combinators and rule decorators for building parsers
-that emit immutable syntax trees through an integrated builder pattern.
+that emit immutable syntax trees with built-in observation support.
 """
 
 from typing import List, Optional, Callable, Any
 from contextlib import contextmanager
-from tree import TreeBuilder, SyntaxTree, NodeView
+from .tree import TreeBuilder, SyntaxTree, NodeView
+from .observe import LexicalContext
+from .tokenize import Token
 
 
 class ParseError(Exception):
-  """Raised when parsing fails"""
+  """Raised when parsing fails."""
 
   pass
 
 
 class TokenStream:
-  """Manages navigation through tokens"""
+  """Manages navigation through tokens."""
 
-  def __init__(self, tokens: List):
+  def __init__(self, tokens: List[Token]):
     self.tokens = tokens
     self.pos = 0
 
-  def peek(self, offset: int = 0) -> Optional:
-    """Look ahead without consuming"""
+  def peek(self, offset: int = 0) -> Optional[Token]:
+    """Look ahead without consuming."""
     idx = self.pos + offset
     return self.tokens[idx] if idx < len(self.tokens) else None
 
-  def consume(self):
-    """Consume and return current token"""
+  def consume(self) -> Token:
+    """Consume and return current token."""
     if self.at_end():
       raise ParseError("Unexpected end of input")
     token = self.tokens[self.pos]
@@ -37,12 +39,12 @@ class TokenStream:
     return token
 
   def match(self, *types: str) -> bool:
-    """Check if current token matches types"""
+    """Check if current token matches types."""
     token = self.peek()
     return token and token.type in types
 
-  def expect(self, *types: str):
-    """Consume token of expected type"""
+  def expect(self, *types: str) -> Token:
+    """Consume token of expected type."""
     token = self.peek()
     if not token:
       raise ParseError(f"Expected {types} but reached end")
@@ -51,55 +53,92 @@ class TokenStream:
     return self.consume()
 
   def at_end(self) -> bool:
-    """Check if at end of stream"""
+    """Check if at end of stream."""
     return self.pos >= len(self.tokens)
 
   def save(self) -> int:
-    """Save current position"""
+    """Save current position."""
     return self.pos
 
   def restore(self, pos: int):
-    """Restore saved position"""
+    """Restore saved position."""
     self.pos = pos
 
 
 class Parser:
-  """Base class for recursive descent parsers"""
+  """
+  Base class for recursive descent parsers with integrated observability.
 
-  def __init__(self, tokens: List):
+  Observability is automatic for all parsing operations including
+  rule execution, token consumption, and backtracking.
+  """
+
+  def __init__(self, tokens: List[Token], obs_context: Optional[LexicalContext] = None):
+    """
+    Initialize parser with observability.
+
+    Args:
+        tokens: List of tokens to parse
+        obs_context: Observability context or None for null context
+    """
+    # Initialize observability first
+    self._obs = obs_context or LexicalContext.null()
+
+    # Standard initialization
     self.tokens = TokenStream(tokens)
-    self.builder = TreeBuilder()
+    self.builder = TreeBuilder(obs_context)  # Pass observability to builder
     self.structural_tokens = {"WHITESPACE", "COMMENT", "NEWLINE"}
     self.skip_structural = False
-    # Control tokens that shouldn't appear in syntax tree
     self.control_tokens = {"EOF", "BOF"}
+
+    # Emit parse start
+    self._obs.emit_event("parse.start", token_count=len(tokens))
 
   # ===== Token Operations =====
 
-  def consume(self):
-    """Consume next token"""
+  def consume(self) -> Token:
+    """
+    Consume next token with observation.
+
+    Emits parse.consume event with token details.
+    """
     if self.skip_structural:
       self._skip_structural_tokens()
 
     token = self.tokens.consume()
+
     # Only add content tokens to syntax tree
     if self._is_syntax_token(token):
       self.builder.add_token(token)
+
+    # Emit consume event
+    self._obs.emit_event("parse.consume", token_type=token.type, token_value=token.value)
+
     return token
 
-  def expect(self, *types: str):
-    """Expect and consume token"""
+  def expect(self, *types: str) -> Token:
+    """
+    Expect and consume token with observation.
+
+    Emits parse.expect events for debugging.
+    """
     if self.skip_structural:
       self._skip_structural_tokens()
 
+    # Emit expectation event
+    self._obs.emit_event("parse.expect.start", expected=types)
+
     token = self.tokens.expect(*types)
-    # Only add content tokens to syntax tree
     if self._is_syntax_token(token):
       self.builder.add_token(token)
+
+    # Emit success event
+    self._obs.emit_event("parse.expect.success", expected=types, found=token.type)
+
     return token
 
   def match(self, *types: str) -> bool:
-    """Check if next token matches"""
+    """Check if next token matches."""
     if self.skip_structural:
       pos = self.tokens.save()
       self._skip_structural_tokens()
@@ -108,8 +147,8 @@ class Parser:
       return result
     return self.tokens.match(*types)
 
-  def peek(self) -> Optional:
-    """Look at next token"""
+  def peek(self) -> Optional[Token]:
+    """Look at next token."""
     if self.skip_structural:
       pos = self.tokens.save()
       self._skip_structural_tokens()
@@ -119,22 +158,22 @@ class Parser:
     return self.tokens.peek()
 
   def _skip_structural_tokens(self):
-    """Skip over structural tokens"""
+    """Skip over structural tokens."""
     while self.tokens.match(*self.structural_tokens):
       self.tokens.consume()
 
-  def _is_syntax_token(self, token) -> bool:
-    """Check if token should be part of syntax tree"""
-    return token.type not in self.control_tokens
+  def _is_syntax_token(self, token: Token) -> bool:
+    """Check if token should be part of syntax tree."""
+    return token.type not in self.control_tokens and token.type not in self.structural_tokens
 
   # ===== Parser Entry Point =====
 
   def parse(self) -> SyntaxTree:
     """
-    Parse tokens into syntax tree.
+    Parse tokens and build syntax tree with observation.
 
-    Subclasses should override parse_root() to define grammar.
-    This method handles EOF verification and tree building.
+    Emits parse.start and parse.complete events, plus all
+    intermediate parsing events.
     """
     try:
       # Parse using grammar root
@@ -152,17 +191,22 @@ class Parser:
 
       # Build and return tree
       frozen = self.builder.build()
-      return SyntaxTree(frozen)
+      tree = SyntaxTree(frozen)
+      self._obs.emit_event("parse.complete", node_count=len(tree.root))
+      return tree
 
-    except ParseError:
-      # Re-raise parse errors with original context
+    except ParseError as e:
+      position = self.tokens.peek().position if not self.tokens.at_end() else None
+      self._obs.emit_error(str(e), position)
       raise
     except Exception as e:
       # Wrap other errors with parse context
       token = self.peek()
       if token:
+        self._obs.emit_error(f"Parse failed: {str(e)}", token.position)
         raise ParseError(f"Parse failed at line {token.line}, column {token.column}: {str(e)}") from e
       else:
+        self._obs.emit_error(f"Parse failed: {str(e)}", None)
         raise ParseError(f"Parse failed: {str(e)}") from e
 
   def parse_root(self):
@@ -178,15 +222,28 @@ class Parser:
   # ===== Parser Combinators =====
 
   def choice(self, *alternatives: Callable) -> Any:
-    """Try alternatives in order"""
+    """
+    Try alternatives in order with observation.
+
+    Emits choice events and backtrack information.
+    """
     last_error = None
 
-    for alt in alternatives:
+    # Emit choice start
+    self._obs.emit_event("parse.choice.start", alternatives=[alt.__name__ for alt in alternatives])
+
+    for i, alt in enumerate(alternatives):
       pos = self.tokens.save()
       builder_depth = len(self.builder._stack)
 
+      # Emit attempt event
+      self._obs.emit_event("parse.choice.attempt", alternative=alt.__name__, index=i)
+
       try:
-        return alt()
+        result = alt()
+        # Emit success
+        self._obs.emit_event("parse.choice.success", alternative=alt.__name__, index=i)
+        return result
       except ParseError as e:
         last_error = e
         self.tokens.restore(pos)
@@ -194,10 +251,13 @@ class Parser:
         while len(self.builder._stack) > builder_depth:
           self.builder.abandon_node()
 
+        # Emit backtrack
+        self._obs.emit_backtrack(alt.__name__, str(e))
+
     raise last_error or ParseError("No alternatives matched")
 
   def many(self, parser_fn: Callable) -> List[Any]:
-    """Parse zero or more occurrences"""
+    """Parse zero or more occurrences."""
     results = []
     while True:
       pos = self.tokens.save()
@@ -209,13 +269,13 @@ class Parser:
     return results
 
   def some(self, parser_fn: Callable) -> List[Any]:
-    """Parse one or more occurrences"""
+    """Parse one or more occurrences."""
     results = [parser_fn()]
     results.extend(self.many(parser_fn))
     return results
 
   def optional(self, parser_fn: Callable) -> Optional[Any]:
-    """Parse zero or one occurrence"""
+    """Parse zero or one occurrence."""
     pos = self.tokens.save()
     try:
       return parser_fn()
@@ -224,7 +284,7 @@ class Parser:
       return None
 
   def separated(self, parser_fn: Callable, delimiter: str) -> List[Any]:
-    """Parse delimited sequence"""
+    """Parse delimited sequence."""
     results = [parser_fn()]
     while self.match(delimiter):
       self.consume()
@@ -235,7 +295,7 @@ class Parser:
 
   @contextmanager
   def structural_handling(self, enabled: bool):
-    """Temporarily change structural token handling"""
+    """Temporarily change structural token handling."""
     old_value = self.skip_structural
     self.skip_structural = enabled
     try:
@@ -245,7 +305,7 @@ class Parser:
 
   @contextmanager
   def custom_structural(self, tokens: set):
-    """Temporarily use custom structural tokens"""
+    """Temporarily use custom structural tokens."""
     old_tokens = self.structural_tokens
     self.structural_tokens = tokens
     try:
@@ -254,44 +314,101 @@ class Parser:
       self.structural_tokens = old_tokens
 
 
-def rule(fn: Callable = None, *, name: Optional[str] = None, capture: bool = True):
-  """Decorator for parser rules"""
+def rule(name: Optional[str] = None, capture: bool = True):
+  """
+  Decorator for parser rules with automatic observation.
 
-  def decorator(func):
-    def wrapper(self: Parser, *args, **kwargs):
-      rule_name = name or func.__name__
+  All rule execution is automatically observed with enter/exit
+  events, timing, and parse stack tracking.
 
-      if capture:
-        self.builder.start_node(rule_name)
+  Args:
+      name: Custom rule name (defaults to function name)
+      capture: Whether to create CST node
+  """
 
-      try:
-        result = func(self, *args, **kwargs)
+  def decorator(func: Callable) -> Callable:
+    rule_name = name or func.__name__
 
+    def wrapper(self, *args, **kwargs):
+      # Get position for context
+      position = None
+      if not self.tokens.at_end():
+        token = self.tokens.peek()
+        if token:
+          position = token.position
+
+      # Always observe rule execution
+      with self._obs.rule(rule_name, position):
         if capture:
-          self.builder.finish_node(rule_name)
-
-        return result
-      except Exception:
-        if capture:
-          self.builder.abandon_node()
-        raise
+          with self.builder.node(rule_name):
+            return func(self, *args, **kwargs)
+        else:
+          return func(self, *args, **kwargs)
 
     wrapper.__name__ = func.__name__
+    wrapper.__doc__ = func.__doc__
     return wrapper
 
-  return decorator if fn is None else decorator(fn)
+  return decorator
+
+
+# ===== Visitor Pattern Support =====
 
 
 class Visitor:
-  """Base class for tree traversal"""
+  """
+  Base class for syntax tree visitors.
+
+  Provides traversal and transformation capabilities
+  for immutable syntax trees.
+  """
 
   def visit(self, node: NodeView) -> Any:
-    """Visit a node or token"""
+    """
+    Visit a node and its children.
+
+    Calls visit_<kind> method if it exists,
+    otherwise visits children.
+    """
     method_name = f"visit_{node.kind}"
-    method = getattr(self, method_name, self.generic_visit)
-    return method(node)
+    method = getattr(self, method_name, None)
+
+    if method:
+      return method(node)
+    else:
+      # Default: visit children
+      return self.generic_visit(node)
 
   def generic_visit(self, node: NodeView) -> Any:
-    """Default visitor for unhandled nodes"""
+    """Default visitor that processes children."""
     for child in node.children:
       self.visit(child)
+
+  def transform(self, node: NodeView) -> NodeView:
+    """
+    Transform a node and its children.
+
+    Returns a new transformed tree.
+    """
+    method_name = f"transform_{node.kind}"
+    method = getattr(self, method_name, None)
+
+    if method:
+      return method(node)
+    else:
+      # Default: transform children
+      return self.generic_transform(node)
+
+  def generic_transform(self, node: NodeView) -> NodeView:
+    """Default transformer that rebuilds with transformed children."""
+    # Transform children
+    new_children = []
+    for child in node.children:
+      transformed = self.transform(child)
+      if transformed:
+        new_children.append(transformed)
+
+    # Rebuild node if children changed
+    if new_children != list(node.children):
+      return node.replace_children(new_children)
+    return node
