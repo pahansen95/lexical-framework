@@ -9,7 +9,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional, List, Callable, Iterator, Union
 
-from .observe import LexicalContext, Position as ObsPosition
+from .observe import LexicalContext
+from .position import Position, SourceNavigator
 
 
 # ===== Core Data Structures =====
@@ -24,18 +25,24 @@ class Token:
 
   type: str
   value: str
-  pos: int
-  line: int
-  column: int
+  position: Position
 
   @property
   def width(self) -> int:
     return len(self.value)
 
+  # Compatibility properties for existing code
   @property
-  def position(self) -> ObsPosition:
-    """Convert to Position object for observability."""
-    return ObsPosition(line=self.line, column=self.column, offset=self.pos)
+  def pos(self) -> int:
+    return self.position.offset
+
+  @property
+  def line(self) -> int:
+    return self.position.line
+
+  @property
+  def column(self) -> int:
+    return self.position.column
 
 
 @dataclass
@@ -49,64 +56,22 @@ class Match:
 class LexError(Exception):
   """Lexical analysis error with position context."""
 
-  def __init__(self, message: str, line: int, column: int, source: Optional[str] = None):
-    self.line = line
-    self.column = column
+  def __init__(self, message: str, position: Position, source: Optional[str] = None):
+    self.position = position
+    self.line = position.line
+    self.column = position.column
 
-    location = f" at line {line}, column {column}"
+    location = f" at line {position.line}, column {position.column}"
     error_msg = f"{message}{location}"
 
     if source:
       lines = source.split("\n")
-      if 0 <= line - 1 < len(lines):
-        line_text = lines[line - 1]
-        pointer = " " * (column - 1) + "^"
+      if 0 <= position.line - 1 < len(lines):
+        line_text = lines[position.line - 1]
+        pointer = " " * (position.column - 1) + "^"
         error_msg += f"\n{line_text}\n{pointer}"
 
     super().__init__(error_msg)
-
-
-class Position:
-  """Mutable position tracker for lexing."""
-
-  def __init__(self, text: str):
-    self.text = text
-    self.pos = 0
-    self.line = 1
-    self.column = 1
-
-  def advance(self, count: int = 1) -> None:
-    """Move position forward."""
-    for _ in range(count):
-      if self.pos < len(self.text):
-        if self.text[self.pos] == "\n":
-          self.line += 1
-          self.column = 1
-        else:
-          self.column += 1
-        self.pos += 1
-
-  def peek(self, offset: int = 0) -> Optional[str]:
-    """Look ahead without advancing."""
-    idx = self.pos + offset
-    return self.text[idx] if idx < len(self.text) else None
-
-  @property
-  def at_end(self) -> bool:
-    return self.pos >= len(self.text)
-
-  @property
-  def at_line_start(self) -> bool:
-    return self.column == 1
-
-  def match_literal(self, literal: str) -> bool:
-    """Check if literal matches at current position."""
-    end = self.pos + len(literal)
-    return self.text[self.pos : end] == literal
-
-  def to_obs_position(self) -> ObsPosition:
-    """Convert to observability Position."""
-    return ObsPosition(line=self.line, column=self.column, offset=self.pos)
 
 
 # ===== Pattern System =====
@@ -117,7 +82,7 @@ class Pattern:
   """Token pattern definition."""
 
   name: str = ""
-  matcher: Optional[Callable[[Position], Optional[Match]]] = None
+  matcher: Optional[Callable[[SourceNavigator], Optional[Match]]] = None
   skip: bool = False
   at_line_start: bool = False
   when: Optional[Callable[["Lexer"], bool]] = None
@@ -138,8 +103,9 @@ class PatternNamespace:
     """Create regex-based pattern."""
     compiled = re.compile(regex_str)
 
-    def matcher(pos: Position) -> Optional[Match]:
-      if m := compiled.match(pos.text, pos.pos):
+    def matcher(nav: SourceNavigator) -> Optional[Match]:
+      remaining = nav.remaining_text()
+      if m := compiled.match(remaining):
         return Match(m.group(0), len(m.group(0)))
       return None
 
@@ -155,23 +121,25 @@ class PatternNamespace:
   ) -> Pattern:
     """Create literal text pattern."""
 
-    def matcher(pos: Position) -> Optional[Match]:
-      if pos.match_literal(text):
+    def matcher(nav: SourceNavigator) -> Optional[Match]:
+      if nav.match_literal(text):
         return Match(text, len(text))
       return None
 
     return Pattern(matcher=matcher, skip=skip, priority=priority, at_line_start=at_line_start, when=when)
 
   @staticmethod
-  def method(method: Callable[["Lexer", Position], Optional[Match]]) -> Pattern:
+  def method(method: Callable[["Lexer", SourceNavigator], Optional[Match]]) -> Pattern:
     """Create pattern from method."""
 
-    def matcher(lexer_instance: "Lexer", pos: Position) -> Optional[Match]:
-      start_pos = pos.pos
-      if method(lexer_instance, pos):
-        length = pos.pos - start_pos
-        value = pos.text[start_pos : pos.pos]
-        return Match(value, length)
+    def matcher(lexer_instance: "Lexer", nav: SourceNavigator) -> Optional[Match]:
+      start_pos = nav.offset
+      result = method(lexer_instance, nav)
+      if result and result.length > 0:
+        return result
+      # Reset if no match
+      if nav.offset != start_pos:
+        nav.restore_state((start_pos, nav._line, nav._column))
       return None
 
     return Pattern(
@@ -251,8 +219,8 @@ def token(
   """Decorator for method-based patterns."""
 
   def decorator(
-    method: Callable[["Lexer", Position], Optional[Match]],
-  ) -> Callable[["Lexer", Position], Optional[Match]]:
+    method: Callable[["Lexer", SourceNavigator], Optional[Match]],
+  ) -> Callable[["Lexer", SourceNavigator], Optional[Match]]:
     method._pattern_kwargs = True
     method._priority = priority
     method._skip = skip
@@ -317,7 +285,7 @@ class Lexer:
         # Create bound version
         bound_pattern = Pattern(
           name=pattern.name,
-          matcher=(lambda pos, p=pattern: p.matcher(self, pos)) if pattern.matcher else None,
+          matcher=(lambda nav, p=pattern: p.matcher(self, nav)) if pattern.matcher else None,
           skip=pattern.skip,
           priority=pattern.priority,
           at_line_start=pattern.at_line_start,
@@ -338,67 +306,73 @@ class Lexer:
     if text and not text.endswith("\n"):
       text += "\n"
 
-    pos = Position(text)
+    nav = SourceNavigator(text)
 
     # Emit lexing start event
     self._obs.emit_event("lex.start", source_length=len(text))
 
     try:
-      while not pos.at_end:
-        token = self._next_token(pos)
+      while not nav.at_end:
+        token = self._next_token(nav)
         if token:
           yield token
 
       # EOF token
-      eof_token = Token("EOF", "", pos.pos, pos.line, pos.column)
-      self._obs.emit_token("EOF", "", pos.to_obs_position())
+      eof_token = Token("EOF", "", nav.position)
+      self._obs.emit_token("EOF", "", nav.position)
       yield eof_token
 
     except Exception as e:
-      self._obs.emit_error(str(e), pos.to_obs_position())
+      self._obs.emit_error(str(e), nav.position)
       if isinstance(e, LexError):
         raise
-      raise LexError(str(e), pos.line, pos.column, text)
+      raise LexError(str(e), nav.position, text)
     finally:
       self._obs.emit_event("lex.complete")
 
-  def _next_token(self, pos: Position) -> Optional[Token]:
+  def _next_token(self, nav: SourceNavigator) -> Optional[Token]:
     """
     Find and consume next token with observation.
 
     Emits search start, token, and error events as appropriate.
     """
-    if pos.at_end:
+    if nav.at_end:
       return None
 
     # Emit search event
-    self._obs.emit_search_start(pos.to_obs_position())
+    self._obs.emit_search_start(nav.position)
+
+    # Save position before matching
+    start_pos = nav.position
 
     for pattern in self._bound_patterns:
-      if pattern.at_line_start and not pos.at_line_start:
+      if pattern.at_line_start and not nav.at_line_start:
         continue
 
       if pattern.when and not pattern.when(self):
         continue
 
-      if match := pattern.matcher(pos):
-        token = Token(pattern.name, match.value, pos.pos, pos.line, pos.column)
-        pos.advance(match.length)
+      if match := pattern.matcher(nav):
+        # Create token with start position
+        token = Token(pattern.name, match.value, start_pos)
+
+        # Advance navigator
+        nav.advance(match.length)
 
         # Emit token event
-        self._obs.emit_token(pattern.name, match.value, token.position)
+        self._obs.emit_token(pattern.name, match.value, start_pos)
 
         if not pattern.skip:
           return token
 
         # Skip token, try next
-        return self._next_token(pos)
+        return self._next_token(nav)
 
     # No pattern matched
-    char = pos.peek() or "<EOF>"
+    char = nav.peek() or "<EOF>"
     error_msg = f"Unexpected character '{char}'"
-    self._obs.emit_error(error_msg, pos.to_obs_position())
-    raise LexError(error_msg, pos.line, pos.column, pos.text)
+    self._obs.emit_error(error_msg, nav.position)
+    raise LexError(error_msg, nav.position, nav._text)
 
   def set_state(self, state_name: str, value: StateValue) -> None:
     """

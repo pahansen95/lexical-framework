@@ -21,10 +21,12 @@ Design Principles:
 import threading
 import time
 from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass
 from typing import Any, Optional, ContextManager
 from collections.abc import Mapping
 from observability import ObservabilityContext, SharedContext
+
+# Import unified Position from position module
+from .position import Position
 
 # Event type constants prevent runtime string construction
 # Lexer events
@@ -44,28 +46,6 @@ PARSE_CACHE_MISS = "parse.cache.miss"
 AST_NODE_CREATE = "ast.node.create"
 AST_TRANSFORM_APPLY = "ast.transform.apply"
 AST_VALIDATION_CHECK = "ast.validation.check"
-
-
-@dataclass(frozen=True)
-class Position:
-  """
-  Immutable position in source text.
-
-  Tracks location for error reporting and debugging.
-  Provides both line/column for human readability and
-  offset for efficient computation.
-  """
-
-  line: int
-  column: int
-  offset: int
-
-  def __post_init__(self) -> None:
-    """Validate position values are non-negative."""
-    if self.line < 0 or self.column < 0 or self.offset < 0:
-      raise ValueError(
-        f"Position values must be non-negative, got line={self.line}, column={self.column}, offset={self.offset}"
-      )
 
 
 class SpanIdGenerator:
@@ -293,7 +273,7 @@ class LexicalContext:
     Args:
         token_type: Token classification (e.g., 'NUMBER', 'IDENTIFIER')
         value: Token text value
-        position: Optional source position
+        position: Optional source position (unified Position type)
     """
     if not self._context.has_handlers():
       return
@@ -320,7 +300,7 @@ class LexicalContext:
     Emit token search start event.
 
     Args:
-        position: Current position in source
+        position: Current position in source (unified Position type)
     """
     if not self._context.has_handlers():
       return
@@ -354,7 +334,7 @@ class LexicalContext:
 
     Args:
         message: Error message
-        position: Optional error position
+        position: Optional error position (unified Position type)
     """
     if not self._context.has_handlers():
       return
@@ -386,7 +366,7 @@ class LexicalContext:
     Args:
         node_type: AST node classification
         attributes: Node attributes/properties
-        position: Optional source position
+        position: Optional source position (unified Position type)
     """
     if not self._context.has_handlers():
       return
@@ -448,7 +428,7 @@ class LexicalContext:
     line boundaries, whichever provides better context.
 
     Args:
-        position: Source position for fragment center
+        position: Source position for fragment center (unified Position type)
 
     Returns:
         Formatted source fragment with ellipsis markers
@@ -497,7 +477,6 @@ __all__ = [
   # Context classes
   "LexicalContext",
   "NullLexicalContext",
-  "Position",
   # Lexer events
   "LEX_TOKEN_EMIT",
   "LEX_STATE_TRANSITION",

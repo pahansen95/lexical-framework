@@ -1,15 +1,15 @@
 """
-Immutable syntax tree construction and navigation.
+Immutable syntax tree data structures and navigation.
 
-Provides frozen tree data structures and builder patterns for creating
+Provides frozen tree representations and view layer for navigating
 immutable syntax trees with efficient structural sharing.
 """
 
 import weakref
 from dataclasses import dataclass
-from typing import Any, List, Optional, Union, Iterator, Tuple, Dict, Set, TypeVar, Generic
+from typing import List, Optional, Union, Iterator, Set, TypeVar, Generic
 from .tokenize import Token
-from .observe import LexicalContext, Position as ObsPosition
+from .position import Position
 
 
 # Type variable for generic visitors
@@ -21,20 +21,18 @@ T = TypeVar("T")
 
 @dataclass(frozen=True)
 class FrozenToken:
-  """Immutable token in syntax tree."""
+  """Immutable token in syntax tree with unified position."""
 
-  __slots__ = ("type", "value", "pos", "line", "column")
+  __slots__ = ("type", "value", "position")
 
   type: str
   value: str
-  pos: int
-  line: int
-  column: int
+  position: Position
 
   @classmethod
   def from_lex_token(cls, token: Token) -> "FrozenToken":
-    """Create from lexer token."""
-    return cls(type=token.type, value=token.value, pos=token.pos, line=token.line, column=token.column)
+    """Create from lexer token - direct position copy."""
+    return cls(type=token.type, value=token.value, position=token.position)
 
 
 @dataclass(frozen=True)
@@ -95,10 +93,10 @@ class NodeView:
     return None
 
   @property
-  def position(self) -> Optional[ObsPosition]:
-    """Source position if token."""
+  def position(self) -> Optional[Position]:
+    """Source position if token - now returns unified Position."""
     if isinstance(self._frozen, FrozenToken):
-      return ObsPosition(line=self._frozen.line, column=self._frozen.column, offset=self._frozen.pos)
+      return self._frozen.position
     return None
 
   @property
@@ -119,28 +117,26 @@ class NodeView:
   @property
   def line(self) -> Optional[int]:
     """Line number if token."""
-    if isinstance(self._frozen, FrozenToken):
-      return self._frozen.line
-    return None
+    pos = self.position
+    return pos.line if pos else None
 
   @property
   def column(self) -> Optional[int]:
     """Column number if token."""
-    if isinstance(self._frozen, FrozenToken):
-      return self._frozen.column
-    return None
+    pos = self.position
+    return pos.column if pos else None
 
-  def find_at_position(self, position: int) -> Optional["NodeView"]:
-    """Find deepest node containing position."""
+  def find_at_position(self, offset: int) -> Optional["NodeView"]:
+    """Find deepest node containing offset."""
     if self.is_token:
-      token = self._frozen
-      if token.pos <= position < token.pos + len(token.value):
+      pos = self.position
+      if pos and pos.offset <= offset < pos.offset + len(self._frozen.value):
         return self
       return None
 
     # Check children
     for child in self.children:
-      if result := child.find_at_position(position):
+      if result := child.find_at_position(offset):
         return result
     return None
 
@@ -179,131 +175,6 @@ class NodeView:
     return FrozenNode(self.kind, tuple(new_children))
 
 
-# ===== Builder Pattern =====
-
-
-@dataclass
-class TreeBuilder:
-  """
-  Builds immutable syntax trees with structural sharing.
-
-  Optionally integrates with observability for AST node events.
-  """
-
-  def __init__(self, obs_context: Optional[LexicalContext] = None):
-    """
-    Initialize builder with optional observability.
-
-    Args:
-        obs_context: Optional observability context for AST events
-    """
-    self._obs = obs_context or LexicalContext.null()
-    self._stack: List[List[FrozenElement]] = [[]]
-    self._node_cache: Dict[Tuple, FrozenNode] = {}
-    self._token_cache: Dict[Tuple[str, str, int, int, int], FrozenToken] = {}
-    self._cache_limit = 100
-
-  def start_node(self, kind: str) -> "TreeBuilder":
-    """Begin building a new node."""
-    self._stack.append([])
-    return self
-
-  def add_token(self, token: Token) -> "TreeBuilder":
-    """Add token with caching."""
-    # Boundary validation
-    assert isinstance(token, Token), f"Expected Token, got {type(token).__name__}"
-    assert token.type, "Token must have a type"
-    assert token.value is not None, "Token must have a value"
-
-    # Create cache key
-    key = (token.type, token.value, token.pos, token.line, token.column)
-
-    if key not in self._token_cache:
-      frozen = FrozenToken.from_lex_token(token)
-      self._token_cache[key] = frozen
-
-      # Emit AST token event if observing
-      if self._obs.has_handlers():
-        self._obs.emit_ast_node("token", {"type": token.type, "value": token.value}, token.position)
-
-    self._stack[-1].append(self._token_cache[key])
-    return self
-
-  def add_frozen(self, element: FrozenElement) -> "TreeBuilder":
-    """Add pre-built element."""
-    self._stack[-1].append(element)
-    return self
-
-  def finish_node(self, kind: str) -> "TreeBuilder":
-    """Complete current node with caching."""
-    if len(self._stack) <= 1:
-      raise ValueError("No node to finish")
-
-    children = tuple(self._stack.pop())
-
-    # Cache small nodes
-    if len(children) <= self._cache_limit:
-      cache_key = (kind, tuple(id(c) for c in children))
-      if cache_key in self._node_cache:
-        node = self._node_cache[cache_key]
-      else:
-        node = FrozenNode(kind, children)
-        self._node_cache[cache_key] = node
-    else:
-      node = FrozenNode(kind, children)
-
-    # Emit AST node event if observing
-    if self._obs.has_handlers():
-      self._obs.emit_ast_node(
-        kind,
-        {"child_count": len(children)},
-        None,  # Internal nodes don't have position
-      )
-
-    self._stack[-1].append(node)
-    return self
-
-  def abandon_node(self) -> "TreeBuilder":
-    """Cancel current node."""
-    if len(self._stack) > 1:
-      self._stack.pop()
-    return self
-
-  def build(self) -> FrozenNode:
-    """Get final tree."""
-    if len(self._stack) != 1:
-      raise ValueError(f"Unclosed nodes: {len(self._stack) - 1}")
-    if len(self._stack[0]) != 1:
-      raise ValueError(f"Expected single root, got {len(self._stack[0])}")
-
-    root = self._stack[0][0]
-    if not isinstance(root, FrozenNode):
-      raise TypeError("Root must be FrozenNode")
-    return root
-
-  # Context manager support
-  def node(self, kind: str):
-    """Context manager for node building."""
-
-    class NodeContext:
-      def __init__(self, builder: TreeBuilder, kind: str):
-        self.builder = builder
-        self.kind = kind
-
-      def __enter__(self) -> TreeBuilder:
-        self.builder.start_node(self.kind)
-        return self.builder
-
-      def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
-        if exc_type is None:
-          self.builder.finish_node(self.kind)
-        else:
-          self.builder.abandon_node()
-        return False
-
-    return NodeContext(self, kind)
-
-
 # ===== High-Level API =====
 
 
@@ -326,9 +197,9 @@ class SyntaxTree:
       self._root_view = NodeView(self._frozen_root)
     return self._root_view
 
-  def find_at_position(self, position: int) -> Optional[NodeView]:
-    """Find node at character position."""
-    return self.root.find_at_position(position)
+  def find_at_position(self, offset: int) -> Optional[NodeView]:
+    """Find node at character offset."""
+    return self.root.find_at_position(offset)
 
   def find_all(self, kind: str) -> List[NodeView]:
     """Find all nodes of given kind."""
@@ -395,9 +266,6 @@ class TreeVisitor(Generic[T]):
 
 class TreeTransformer(TreeVisitor[FrozenElement]):
   """Base transformer creating new trees."""
-
-  def __init__(self):
-    self.builder = TreeBuilder()
 
   def transform(self, tree: SyntaxTree) -> SyntaxTree:
     """Transform entire tree."""
