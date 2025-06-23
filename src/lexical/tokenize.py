@@ -7,12 +7,15 @@ with support for stateful lexing and position tracking.
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional, List, Callable, Iterator, Any
+from typing import Optional, List, Callable, Iterator, Union
 
 from .observe import LexicalContext, Position as ObsPosition
 
 
 # ===== Core Data Structures =====
+
+# Type alias for allowed state values
+StateValue = Union[int, str, bool, List[str], None]
 
 
 @dataclass(frozen=True)
@@ -72,7 +75,7 @@ class Position:
     self.line = 1
     self.column = 1
 
-  def advance(self, count: int = 1):
+  def advance(self, count: int = 1) -> None:
     """Move position forward."""
     for _ in range(count):
       if self.pos < len(self.text):
@@ -117,7 +120,7 @@ class Pattern:
   matcher: Optional[Callable[[Position], Optional[Match]]] = None
   skip: bool = False
   at_line_start: bool = False
-  when: Optional[Callable] = None
+  when: Optional[Callable[["Lexer"], bool]] = None
   priority: int = 0
 
 
@@ -126,7 +129,11 @@ class PatternNamespace:
 
   @staticmethod
   def regex(
-    regex_str: str, skip: bool = False, priority: int = 0, at_line_start: bool = False, when: Optional[Callable] = None
+    regex_str: str,
+    skip: bool = False,
+    priority: int = 0,
+    at_line_start: bool = False,
+    when: Optional[Callable[["Lexer"], bool]] = None,
   ) -> Pattern:
     """Create regex-based pattern."""
     compiled = re.compile(regex_str)
@@ -140,7 +147,11 @@ class PatternNamespace:
 
   @staticmethod
   def literal(
-    text: str, skip: bool = False, priority: int = 0, at_line_start: bool = False, when: Optional[Callable] = None
+    text: str,
+    skip: bool = False,
+    priority: int = 0,
+    at_line_start: bool = False,
+    when: Optional[Callable[["Lexer"], bool]] = None,
   ) -> Pattern:
     """Create literal text pattern."""
 
@@ -152,10 +163,10 @@ class PatternNamespace:
     return Pattern(matcher=matcher, skip=skip, priority=priority, at_line_start=at_line_start, when=when)
 
   @staticmethod
-  def method(method: Callable) -> Pattern:
+  def method(method: Callable[["Lexer", Position], Optional[Match]]) -> Pattern:
     """Create pattern from method."""
 
-    def matcher(lexer_instance, pos: Position) -> Optional[Match]:
+    def matcher(lexer_instance: "Lexer", pos: Position) -> Optional[Match]:
       start_pos = pos.pos
       if method(lexer_instance, pos):
         length = pos.pos - start_pos
@@ -182,16 +193,16 @@ pattern = PatternNamespace()
 class State:
   """Generic mutable state container."""
 
-  value: Any = None
-  initial: Any = field(init=False)
+  value: StateValue = None
+  initial: StateValue = field(init=False)
 
-  def __post_init__(self):
+  def __post_init__(self) -> None:
     self.initial = self.value
 
-  def set(self, value: Any):
+  def set(self, value: StateValue) -> None:
     self.value = value
 
-  def reset(self):
+  def reset(self) -> None:
     self.value = self.initial
 
 
@@ -214,16 +225,16 @@ class Counter(State):
 class Stack(State):
   """Stack state for nested contexts."""
 
-  value: List[Any] = field(default_factory=list)
+  value: List[StateValue] = field(default_factory=list)
 
-  def push(self, item: Any):
+  def push(self, item: StateValue) -> None:
     self.value.append(item)
 
-  def pop(self) -> Any:
+  def pop(self) -> StateValue:
     return self.value.pop() if self.value else None
 
   @property
-  def current(self) -> Any:
+  def current(self) -> StateValue:
     return self.value[-1] if self.value else None
 
   @property
@@ -234,10 +245,14 @@ class Stack(State):
 # ===== Method Pattern Decorator =====
 
 
-def token(priority: int = 0, skip: bool = False, at_line_start: bool = False, when: Optional[Callable] = None):
+def token(
+  priority: int = 0, skip: bool = False, at_line_start: bool = False, when: Optional[Callable[["Lexer"], bool]] = None
+):
   """Decorator for method-based patterns."""
 
-  def decorator(method):
+  def decorator(
+    method: Callable[["Lexer", Position], Optional[Match]],
+  ) -> Callable[["Lexer", Position], Optional[Match]]:
     method._pattern_kwargs = True
     method._priority = priority
     method._skip = skip
@@ -259,7 +274,7 @@ class Lexer:
   class attributes and decorated methods.
   """
 
-  def __init_subclass__(cls):
+  def __init_subclass__(cls) -> None:
     """Collect patterns from class definition."""
     cls._patterns = []
     cls._states = {}
@@ -317,6 +332,9 @@ class Lexer:
     Emits lex.start and lex.complete events, plus individual
     token events as patterns match.
     """
+    # Boundary validation
+    assert isinstance(text, str), f"text must be str, got {type(text).__name__}"
+
     if text and not text.endswith("\n"):
       text += "\n"
 
@@ -382,13 +400,19 @@ class Lexer:
     self._obs.emit_error(error_msg, pos.to_obs_position())
     raise LexError(error_msg, pos.line, pos.column, pos.text)
 
-  def set_state(self, state_name: str, value: Any) -> None:
+  def set_state(self, state_name: str, value: StateValue) -> None:
     """
     Set lexer state with observation.
 
     Emits state change events for debugging and analysis.
     """
-    if hasattr(self, state_name):
-      old_value = getattr(self, state_name)
-      setattr(self, state_name, value)
-      self._obs.state_change(state_name, old_value, value)
+    # Boundary validation
+    assert hasattr(self, state_name), f"Unknown state: {state_name}"
+    assert isinstance(value, (int, str, bool, list, type(None))), f"Invalid state value type: {type(value).__name__}"
+
+    old_value = getattr(self, state_name)
+    assert hasattr(old_value, "set"), f"{state_name} is not a mutable state"
+
+    # Set new value
+    old_value.set(value)
+    self._obs.state_change(state_name, old_value.value, value)

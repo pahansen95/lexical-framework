@@ -5,11 +5,15 @@ Provides parser combinators and rule decorators for building parsers
 that emit immutable syntax trees with built-in observation support.
 """
 
-from typing import List, Optional, Callable, Any
+from typing import List, Optional, Callable, TypeVar, Generic
 from contextlib import contextmanager
 from .tree import TreeBuilder, SyntaxTree, NodeView
 from .observe import LexicalContext
 from .tokenize import Token
+
+
+# Type variables for generic parser combinators
+T = TypeVar("T")
 
 
 class ParseError(Exception):
@@ -41,7 +45,7 @@ class TokenStream:
   def match(self, *types: str) -> bool:
     """Check if current token matches types."""
     token = self.peek()
-    return token and token.type in types
+    return token is not None and token.type in types
 
   def expect(self, *types: str) -> Token:
     """Consume token of expected type."""
@@ -60,7 +64,7 @@ class TokenStream:
     """Save current position."""
     return self.pos
 
-  def restore(self, pos: int):
+  def restore(self, pos: int) -> None:
     """Restore saved position."""
     self.pos = pos
 
@@ -81,6 +85,16 @@ class Parser:
         tokens: List of tokens to parse
         obs_context: Observability context or None for null context
     """
+    # Boundary validation
+    assert isinstance(tokens, list), f"tokens must be list, got {type(tokens).__name__}"
+    assert tokens, "tokens list cannot be empty"
+    assert all(isinstance(t, Token) for t in tokens), "all elements must be Token instances"
+    assert tokens[-1].type == "EOF", "tokens must end with EOF token"
+
+    # Check for duplicate EOF
+    eof_count = sum(1 for t in tokens if t.type == "EOF")
+    assert eof_count == 1, f"Expected exactly one EOF token, found {eof_count}"
+
     # Initialize observability first
     self._obs = obs_context or LexicalContext.null()
 
@@ -157,7 +171,7 @@ class Parser:
       return token
     return self.tokens.peek()
 
-  def _skip_structural_tokens(self):
+  def _skip_structural_tokens(self) -> None:
     """Skip over structural tokens."""
     while self.tokens.match(*self.structural_tokens):
       self.tokens.consume()
@@ -209,7 +223,7 @@ class Parser:
         self._obs.emit_error(f"Parse failed: {str(e)}", None)
         raise ParseError(f"Parse failed: {str(e)}") from e
 
-  def parse_root(self):
+  def parse_root(self) -> None:
     """
     Parse grammar root. Override in subclasses.
 
@@ -221,13 +235,13 @@ class Parser:
 
   # ===== Parser Combinators =====
 
-  def choice(self, *alternatives: Callable) -> Any:
+  def choice(self, *alternatives: Callable[[], T]) -> T:
     """
     Try alternatives in order with observation.
 
     Emits choice events and backtrack information.
     """
-    last_error = None
+    last_error: Optional[ParseError] = None
 
     # Emit choice start
     self._obs.emit_event("parse.choice.start", alternatives=[alt.__name__ for alt in alternatives])
@@ -256,9 +270,9 @@ class Parser:
 
     raise last_error or ParseError("No alternatives matched")
 
-  def many(self, parser_fn: Callable) -> List[Any]:
+  def many(self, parser_fn: Callable[[], T]) -> List[T]:
     """Parse zero or more occurrences."""
-    results = []
+    results: List[T] = []
     while True:
       pos = self.tokens.save()
       try:
@@ -268,13 +282,13 @@ class Parser:
         break
     return results
 
-  def some(self, parser_fn: Callable) -> List[Any]:
+  def some(self, parser_fn: Callable[[], T]) -> List[T]:
     """Parse one or more occurrences."""
     results = [parser_fn()]
     results.extend(self.many(parser_fn))
     return results
 
-  def optional(self, parser_fn: Callable) -> Optional[Any]:
+  def optional(self, parser_fn: Callable[[], T]) -> Optional[T]:
     """Parse zero or one occurrence."""
     pos = self.tokens.save()
     try:
@@ -283,7 +297,7 @@ class Parser:
       self.tokens.restore(pos)
       return None
 
-  def separated(self, parser_fn: Callable, delimiter: str) -> List[Any]:
+  def separated(self, parser_fn: Callable[[], T], delimiter: str) -> List[T]:
     """Parse delimited sequence."""
     results = [parser_fn()]
     while self.match(delimiter):
@@ -355,7 +369,7 @@ def rule(name: Optional[str] = None, capture: bool = True):
 # ===== Visitor Pattern Support =====
 
 
-class Visitor:
+class Visitor(Generic[T]):
   """
   Base class for syntax tree visitors.
 
@@ -363,7 +377,7 @@ class Visitor:
   for immutable syntax trees.
   """
 
-  def visit(self, node: NodeView) -> Any:
+  def visit(self, node: NodeView) -> T:
     """
     Visit a node and its children.
 
@@ -379,10 +393,9 @@ class Visitor:
       # Default: visit children
       return self.generic_visit(node)
 
-  def generic_visit(self, node: NodeView) -> Any:
+  def generic_visit(self, node: NodeView) -> T:
     """Default visitor that processes children."""
-    for child in node.children:
-      self.visit(child)
+    raise NotImplementedError("Must implement generic_visit with return type T")
 
   def transform(self, node: NodeView) -> NodeView:
     """
@@ -406,9 +419,9 @@ class Visitor:
     for child in node.children:
       transformed = self.transform(child)
       if transformed:
-        new_children.append(transformed)
+        new_children.append(transformed._frozen)
 
     # Rebuild node if children changed
-    if new_children != list(node.children):
-      return node.replace_children(new_children)
+    if new_children != [c._frozen for c in node.children]:
+      return NodeView(node._frozen.replace_children(new_children))
     return node

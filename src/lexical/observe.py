@@ -68,6 +68,42 @@ class Position:
       )
 
 
+class SpanIdGenerator:
+  """Thread-safe unique span ID generator."""
+
+  _instance: Optional["SpanIdGenerator"] = None
+  _lock = threading.Lock()
+
+  def __new__(cls) -> "SpanIdGenerator":
+    if cls._instance is None:
+      with cls._lock:
+        if cls._instance is None:
+          cls._instance = super().__new__(cls)
+          cls._instance._counter = 0
+          cls._instance._counter_lock = threading.Lock()
+    return cls._instance
+
+  def next_id(self) -> str:
+    """Generate next unique span ID."""
+    with self._counter_lock:
+      self._counter += 1
+      return f"{self._counter:x}"
+
+  def reset(self) -> None:
+    """Reset counter for testing."""
+    with self._counter_lock:
+      self._counter = 0
+
+
+# Module-level instance
+_span_id_generator = SpanIdGenerator()
+
+
+def _generate_span_id() -> str:
+  """Generate unique span ID efficiently."""
+  return _span_id_generator.next_id()
+
+
 class NullLexicalContext:
   """
   No-op implementation for disabled observability.
@@ -97,11 +133,11 @@ class NullLexicalContext:
     """No-op error event."""
     pass
 
-  def emit_event(self, event_type: str, value: Any = None, **metadata) -> None:
+  def emit_event(self, event_type: str, value: Any = None, **metadata: Any) -> None:
     """No-op generic event emission."""
     pass
 
-  def rule(self, name: str, position: Optional[Position] = None) -> ContextManager:
+  def rule(self, name: str, position: Optional[Position] = None) -> ContextManager[None]:
     """Return null context manager for rule tracking."""
     return nullcontext()
 
@@ -165,7 +201,7 @@ class LexicalContext:
       self._local = type("LocalStorage", (), {"parse_stack": [], "rule_timings": []})()
 
   @staticmethod
-  def null() -> "LexicalContext":
+  def null() -> NullLexicalContext:
     """Return singleton null context for zero-overhead operation."""
     return _null_context
 
@@ -221,8 +257,11 @@ class LexicalContext:
     enter_time = time.perf_counter_ns()
     self._rule_timings.append(enter_time)
 
+    # Generate span ID using singleton
+    span_id = _generate_span_id()
+
     # Lazy metadata construction
-    metadata = {"rule": name, "parse_stack": list(stack), "parse_depth": len(stack)}
+    metadata = {"rule": name, "parse_stack": list(stack), "parse_depth": len(stack), "span_id": span_id}
     if position is not None:
       metadata["position"] = position
 
@@ -242,6 +281,7 @@ class LexicalContext:
         "parse_depth": len(stack),
         "duration_ns": duration_ns,
         "duration_ms": duration_ns / 1_000_000,
+        "span_id": span_id,
       }
 
       self._context.emit_event(PARSE_RULE_EXIT, name, **metadata)
@@ -325,7 +365,7 @@ class LexicalContext:
 
     self._context.emit_event("error", message, **metadata)
 
-  def emit_event(self, event_type: str, value: Any = None, **metadata) -> None:
+  def emit_event(self, event_type: str, value: Any = None, **metadata: Any) -> None:
     """
     Emit generic event.
 
