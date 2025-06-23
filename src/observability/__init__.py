@@ -1,167 +1,120 @@
 """
 # Observability Package
 
-A unified event emission infrastructure that provides zero-overhead instrumentation for logging, tracing, and metrics collection. The package implements a tree-based event dispatch system where telemetry data flows through a central pipeline to multiple, independent handlers.
+A unified event emission infrastructure that provides zero-overhead instrumentation
+for logging, tracing, and metrics collection. The package implements a context-based
+architecture where all observability state is encapsulated in explicit context objects.
 
 ## Architecture
 
-The observability system separates event production from consumption through a publish-subscribe model:
+The observability system uses explicit contexts to manage state and configuration:
 
 ```
 Application Code
+    ↓
+ObservabilityContext ←── SharedContext.get()
     ↓ emit()
-Core Event System
-    ↓ dispatch
-Handler Tree
+Handler Pipeline
     ├─→ Logging Handler → File/Console
     ├─→ Metrics Handler → Aggregation/Export
     └─→ Trace Handler   → Span Collection
 ```
 
-This separation enables flexible telemetry collection where the same event can be processed differently by multiple handlers without coupling the event source to specific destinations.
+## Context-Based Design
 
-## Core Concepts
-
-**Events**: Immutable records containing typed data, timestamps, and contextual metadata that flow through the system.
-
-**Domains**: Specialized APIs (logging, tracing, metrics) that translate high-level operations into structured events.
-
-**Handlers**: Event consumers organized in a tree structure that process events independently with isolated error handling.
-
-**Zero-Overhead**: When no handlers are attached, the entire system reduces to a single boolean check, ensuring production code pays no performance penalty for unused instrumentation.
-
-## Design Principles
-
-- **Unified Pipeline**: All telemetry flows through one event system
-- **Domain Separation**: Each observability concern has its own intuitive API
-- **Handler Composition**: Complex processing built from simple, focused handlers
-- **Fail-Safe Operation**: Handler errors never affect event emission or other handlers
-- **Context Propagation**: Automatic correlation through ambient context variables
-
-## Basic Usage
+All observability state lives within context objects, eliminating global state:
 
 ```python
-from observability import attach, logging, tracing, metrics
+# Create configured context
+config = ObservabilityConfig(
+    handlers=[ManagedFileHandler('app.log'), JsonHandler(sys.stderr)],
+    sampling_rate=0.1
+)
+context = ObservabilityContext(config)
+context.start()
 
-# Attach handlers to process events
-attach(create_file_handler('app.log'))
-attach(create_metrics_aggregator())
+# Or use shared context for convenience
+SharedContext.setup(config)
+context = SharedContext.get()
 
-# Use domain APIs to emit events
-logger = logging.get_logger('myapp')
+# Instantiate domains directly
+from observability.domains.logging import Logger
+from observability.domains.tracing import Span
+from observability.domains.metrics import Counter
+
+logger = Logger('myapp', context)
 logger.info('Application started')
 
-with tracing.span('process_request'):
-    metrics.Counter('requests').increment()
+with Span('operation', context) as span:
+    span.set_attribute('user_id', 123)
+
+counter = Counter('requests', context)
+counter.increment(endpoint='/api/users')
 ```
 
-The package provides a foundation for comprehensive observability while maintaining simplicity and performance in production systems.
+## Zero-Overhead Guarantee
+
+When no handlers are attached, the entire system reduces to a single boolean check,
+ensuring production code pays no performance penalty for unused instrumentation.
 """
 
-from typing import Any
-
-# Core event system
+# Context infrastructure
 from .core import (
-  # Event emission
-  emit,
-  # Handler management
-  attach,
-  detach,
-  clear,
-  # Performance utilities
-  has_handlers,
-  get_handler_count,
-  # Context management
-  set_context,
-  # Category filtering
-  enable_categories,
-  disable_categories,
-  reset_filters,
-  # Testing support
-  capture_events,
+  ObservabilityContext,
+  ObservabilityConfig,
+  create_observability,
 )
 
-# Handler utilities
+# Shared Context
+from .shared import SharedContext
+
+# Handler imports
 from .handlers import (
-  # Basic handlers
-  create_print_handler,
-  create_file_handler,
-  create_buffer_handler,
-  # Composition handlers
-  create_async_handler,
-  create_conditional_handler,
-  create_sampling_handler,
+  PrintHandler,
+  JsonHandler,
+  ManagedFileHandler,
+  BufferHandler,
+  filtered,
+  sampled,
+  AsyncHandlerWorker,
+  FanoutHandler,
+  FallbackHandler,
 )
 
-# Type exports for static analysis
+# Type exports
 from .types import EventDict, EventHandler
 
+# Context variables
+import contextvars
+from typing import Final, Optional
 
-class _DomainNamespace:
-  """Lazy-loading namespace for domain modules."""
-
-  __slots__ = ("_module_name", "_module", "_loaded_attrs")
-
-  def __init__(self, module_name: str):
-    self._module_name = module_name
-    self._module = None
-    self._loaded_attrs = {}
-
-  def __getattr__(self, name: str) -> Any:
-    # Cache individual attributes to avoid repeated lookups
-    if name in self._loaded_attrs:
-      return self._loaded_attrs[name]
-
-    # Lazy import on first access
-    if self._module is None:
-      import importlib
-
-      self._module = importlib.import_module(self._module_name)
-
-    attr = getattr(self._module, name)
-    self._loaded_attrs[name] = attr
-    return attr
-
-  def __dir__(self):
-    # Enable IDE autocompletion
-    if self._module is None:
-      import importlib
-
-      self._module = importlib.import_module(self._module_name)
-    return dir(self._module)
-
-
-# Domain namespaces
-logging = _DomainNamespace("observability.domains.logging")
-tracing = _DomainNamespace("observability.domains.tracing")
-metrics = _DomainNamespace("observability.domains.metrics")
+trace_id: Final[contextvars.ContextVar[Optional[str]]] = contextvars.ContextVar("trace_id", default=None)
+request_id: Final[contextvars.ContextVar[Optional[str]]] = contextvars.ContextVar("request_id", default=None)
+operation_id: Final[contextvars.ContextVar[Optional[str]]] = contextvars.ContextVar("operation_id", default=None)
 
 # Public API
 __all__ = [
-  # Core functions
-  "emit",
-  "attach",
-  "detach",
-  "clear",
-  "has_handlers",
-  "get_handler_count",
-  "set_context",
-  "capture_events",
-  "enable_categories",
-  "disable_categories",
-  "reset_filters",
-  # Handler factories
-  "create_print_handler",
-  "create_file_handler",
-  "create_buffer_handler",
-  "create_async_handler",
-  "create_conditional_handler",
-  "create_sampling_handler",
+  # Context infrastructure
+  "ObservabilityContext",
+  "ObservabilityConfig",
+  "create_observability",
+  # Shared Context
+  "SharedContext",
+  # Handler classes
+  "PrintHandler",
+  "JsonHandler",
+  "ManagedFileHandler",
+  "BufferHandler",
+  "filtered",
+  "sampled",
+  "AsyncHandlerWorker",
+  "FanoutHandler",
+  "FallbackHandler",
   # Types
   "EventDict",
   "EventHandler",
-  # Domain namespaces
-  "logging",
-  "tracing",
-  "metrics",
+  # Context variables
+  "trace_id",
+  "request_id",
+  "operation_id",
 ]

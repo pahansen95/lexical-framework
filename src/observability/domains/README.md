@@ -1,6 +1,8 @@
 # Observability Domains
 
-Specialized event producers that translate domain-specific operations into structured events for the observability pipeline. Each domain provides an intuitive API for its particular concern while maintaining consistent event emission patterns.
+Specialized event producers that translate domain-specific operations into structured events
+for the observability pipeline. Each domain provides an intuitive API for its particular
+concern while maintaining consistent event emission patterns.
 
 ## Event Producer Architecture
 
@@ -32,13 +34,14 @@ SPAN_START: Final[str] = "span.start" # Zero runtime overhead
 
 **Context Integration**: Automatic enrichment via contextvars
 ```python
+from observability import trace_id, request_id
 trace_id.get()     # Ambient correlation data
 request_id.get()   # Flows through all events
 ```
 
 **Zero-Cost Design**: Early exits when no consumers exist
 ```python
-if not has_handlers():
+if not self._context.has_handlers():
     return  # No work performed
 ```
 
@@ -50,13 +53,16 @@ def log(self, level: int, msg: str, **kwargs: Any) -> None:
 ## Available Domains
 
 ### Logging
-Hierarchical loggers with severity-based filtering. Transforms traditional log calls into structured events with automatic context enrichment.
+Hierarchical loggers with severity-based filtering. Transforms traditional log calls
+into structured events with automatic context enrichment.
 
 ### Tracing  
-Distributed execution flow tracking through spans. Captures parent-child relationships and durations as discrete start/end events.
+Distributed execution flow tracking through spans. Captures parent-child relationships
+and durations as discrete start/end events.
 
 ### Metrics
-Statistical aggregation of numeric measurements. Provides Counter, Gauge, and Histogram types that emit measurement events.
+Statistical aggregation of numeric measurements. Provides Counter, Gauge, and Histogram
+types that emit measurement events.
 
 ## Creating New Domains
 
@@ -79,10 +85,13 @@ operation_context: ContextVar[str] = ContextVar('operation_context')
 Create intuitive interfaces that emit events:
 ```python
 class MyDomain:
+    def __init__(self, context: ObservabilityContext):
+        self._context = context
+        
     def operation(self, value: Any) -> None:
-        if not has_handlers():
+        if not self._context.has_handlers():
             return  # Zero-cost when disabled
-        emit(EVENT_ACTION, value)
+        self._context.emit(EVENT_ACTION, value)
 ```
 
 ### 4. Implement Domain Handler
@@ -98,7 +107,7 @@ def create_domain_handler() -> EventHandler:
 ### 5. Ensure Zero Overhead
 Check handlers before any work:
 ```python
-if not has_handlers():
+if not self._context.has_handlers():
     return  # Early exit before any computation
 ```
 
@@ -118,21 +127,26 @@ Domains maintain the core system's performance characteristics:
 Domains integrate through the standard observability pipeline:
 
 ```python
-from observability import attach
-from observability.domains import logging, tracing, metrics
+from observability import ObservabilityContext, ObservabilityConfig
+from observability.domains.logging import Logger
+from observability.domains.tracing import Span
+from observability.domains.metrics import Counter
+
+# Create context with handlers
+config = ObservabilityConfig(handlers=[...])
+context = ObservabilityContext(config)
+context.start()
 
 # Create domain instances
-logger = logging.get_logger('myapp')
-counter = metrics.Counter('requests')
-
-# Attach handlers
-attach(logging.create_log_formatter())
-attach(metrics.create_metrics_aggregator())
+logger = Logger('myapp', context)
+counter = Counter('requests', context)
 
 # Use domains - events flow to all attached handlers
-with tracing.span('operation'):
+with Span('operation', context) as span:
     logger.info('Processing request')
     counter.increment()
 ```
 
-Each domain emits events through the same core system, enabling unified processing while maintaining domain-specific semantics. This architecture allows teams to start with one domain and incrementally add others without architectural changes.
+Each domain emits events through the same core system, enabling unified processing
+while maintaining domain-specific semantics. This architecture allows teams to start
+with one domain and incrementally add others without architectural changes.

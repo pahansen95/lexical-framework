@@ -1,118 +1,99 @@
 """
 Sink handlers for event output.
 
-Terminal event consumers that write events to external destinations such as
-console streams, files, or structured formats. These handlers perform the
-final I/O operations in the event processing pipeline.
+Terminal event consumers that write events to external destinations.
 """
 
 import json
 import sys
 from typing import TextIO
 
-from ..types import EventDict, EventHandler
+from ..types import EventDict
 from .base import format_event_simple, format_context_items, STANDARD_EXCLUSIONS
 
 
-def print_handler(
-  stream: TextIO = sys.stdout, format: str = "{timestamp_ms:8.1f}ms {type}: {value}", include_context: bool = True
-) -> EventHandler:
-  """
-  Create console output handler.
+class PrintHandler:
+  """Console output handler with lifecycle support."""
 
-  Writes formatted events to a text stream with optional context inclusion.
-  Default format emphasizes readability with timestamp, type, and value.
+  def __init__(
+    self,
+    stream: TextIO = sys.stdout,
+    format: str = "{timestamp_ms:8.1f}ms {type}: {value}",
+    include_context: bool = True,
+  ):
+    self.stream = stream
+    self.format = format
+    self.include_context = include_context
+    self._is_initialized = False
 
-  Args:
-      stream: Output stream (default: stdout)
-      format: Format string with event field placeholders
-      include_context: Append additional fields as context
+  async def initialize(self) -> None:
+    """Initialize handler (no-op for print handler)."""
+    self._is_initialized = True
 
-  Returns:
-      Handler that prints formatted events
+  async def shutdown(self) -> None:
+    """Flush stream on shutdown."""
+    if hasattr(self.stream, "flush"):
+      self.stream.flush()
+    self._is_initialized = False
 
-  Example:
-      handler = print_handler(format="{type}: {value}")
-  """
-
-  def handler(event: EventDict) -> None:
+  def __call__(self, event: EventDict) -> None:
+    """Process event."""
     try:
       # Format primary message
-      message = format_event_simple(event, format)
+      message = format_event_simple(event, self.format)
 
       # Add context if requested
-      if include_context:
-        # Extract fields not in format string
+      if self.include_context:
         exclude = STANDARD_EXCLUSIONS.copy()
         # Add fields already in format to exclusions
         for field in event.keys():
-          if f"{{{field}}}" in format:
+          if f"{{{field}}}" in self.format:
             exclude.add(field)
 
         context_items = format_context_items(event, exclude)
         if context_items:
           message += f" ({', '.join(context_items)})"
 
-      print(message, file=stream)
+      print(message, file=self.stream)
 
     except Exception as e:
       if __debug__:
         print(f"Print handler error: {e}", file=sys.stderr)
 
-  handler.__name__ = f"print_handler(stream={stream.name})"
-  return handler
 
+class JsonHandler:
+  """JSON output handler with lifecycle support."""
 
-def json_handler(stream: TextIO = sys.stdout, pretty: bool = False, ensure_ascii: bool = True) -> EventHandler:
-  """
-  Create JSON output handler.
+  def __init__(self, stream: TextIO = sys.stdout, pretty: bool = False, ensure_ascii: bool = True):
+    self.stream = stream
+    self.pretty = pretty
+    self.ensure_ascii = ensure_ascii
+    self._is_initialized = False
 
-  Serializes events as JSON objects, one per line. Supports both
-  compact and pretty-printed output formats.
+  async def initialize(self) -> None:
+    """Initialize handler."""
+    self._is_initialized = True
 
-  Args:
-      stream: Output stream (default: stdout)
-      pretty: Enable pretty-printing with indentation
-      ensure_ascii: Escape non-ASCII characters
+  async def shutdown(self) -> None:
+    """Flush stream on shutdown."""
+    if hasattr(self.stream, "flush"):
+      self.stream.flush()
+    self._is_initialized = False
 
-  Returns:
-      Handler that outputs JSON-formatted events
-
-  Example:
-      handler = json_handler(pretty=True)
-  """
-
-  def handler(event: EventDict) -> None:
+  def __call__(self, event: EventDict) -> None:
+    """Process event as JSON."""
     try:
-      if pretty:
-        json.dump(event, stream, default=str, indent=2, ensure_ascii=ensure_ascii)
+      if self.pretty:
+        json.dump(event, self.stream, default=str, indent=2, ensure_ascii=self.ensure_ascii)
       else:
-        json.dump(event, stream, default=str, ensure_ascii=ensure_ascii)
+        json.dump(event, self.stream, default=str, ensure_ascii=self.ensure_ascii)
 
-      stream.write("\n")
-      stream.flush()
+      self.stream.write("\n")
+      self.stream.flush()
 
     except Exception as e:
       if __debug__:
         print(f"JSON handler error: {e}", file=sys.stderr)
 
-  handler.__name__ = f"json_handler(stream={stream.name}, pretty={pretty})"
-  return handler
 
-
-def null_handler() -> EventHandler:
-  """
-  Create a no-op handler.
-
-  Discards all events without processing. Useful for testing
-  or as a placeholder in conditional configurations.
-
-  Returns:
-      Handler that discards all events
-  """
-
-  def handler(event: EventDict) -> None:
-    pass
-
-  handler.__name__ = "null_handler"
-  return handler
+# No factory functions - use classes directly

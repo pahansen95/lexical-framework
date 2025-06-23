@@ -7,12 +7,26 @@ that ensure consistent behavior across the handler ecosystem.
 """
 
 import sys
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 from ..types import EventDict
 
 
+@runtime_checkable
+class LifecycleHandler(Protocol):
+  """Handler with async lifecycle management."""
+
+  async def initialize(self) -> None:
+    """Initialize handler resources."""
+    ...
+
+  async def shutdown(self) -> None:
+    """Shutdown handler and release resources."""
+    ...
+
+
+@runtime_checkable
 class ManagedHandler(Protocol):
-  """Handler with lifecycle management capabilities."""
+  """Handler with synchronous resource management."""
 
   def close(self) -> None:
     """Release handler resources gracefully."""
@@ -20,14 +34,6 @@ class ManagedHandler(Protocol):
 
   def flush(self) -> None:
     """Force pending operations to complete."""
-    ...
-
-
-class AsyncHandler(Protocol):
-  """Handler with asynchronous shutdown capability."""
-
-  def shutdown(self) -> None:
-    """Gracefully stop asynchronous processing."""
     ...
 
 
