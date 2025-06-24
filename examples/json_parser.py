@@ -9,15 +9,13 @@ and Python object building.
 from typing import Any, Dict, List, Union, Optional
 from dataclasses import dataclass
 import argparse
-import sys
 import json
 
 from lexical.tokenize import Lexer, pattern
 from lexical.parse import Parser, rule, ParseError
 from lexical.tree import SyntaxTree, NodeView, TreeVisitor
 from lexical.observe import LexicalContext
-from observability import SharedContext, ObservabilityConfig
-from observability.handlers import PrintHandler
+from observability import SharedContext
 
 
 # ===== Phase 1: Tokenization =====
@@ -401,10 +399,7 @@ def main():
   obs_context = None
   if not args.quiet:
     print("=== Setting up Observability ===")
-    config = ObservabilityConfig(
-      handlers=[PrintHandler(sys.stderr, format="{timestamp_ms:8.1f}ms {type}: {value}", include_context=True)]
-    )
-    SharedContext.setup(config)
+    SharedContext.setup()
     print(f"Handler count: {SharedContext.get().get_handler_count()}")
 
     # Create lexical context that uses the shared context
