@@ -20,6 +20,9 @@ from lexical.tokenize import Lexer, pattern
 from lexical.parse import Parser, rule, ParseError
 from lexical.tree import NodeView, TreeVisitor
 from lexical.observe import LexicalContext
+from observability import SharedContext, ObservabilityConfig
+from observability.handlers import PrintHandler
+import sys
 
 
 # ===== Phase 1: Tokenization =====
@@ -354,13 +357,16 @@ class PythonCodeGenerator:
 # ===== Phase 5: Evaluation =====
 
 
-def evaluate_calc(source: str, variables: Optional[Dict[str, Any]] = None) -> Any:
+def evaluate_calc(
+  source: str, variables: Optional[Dict[str, Any]] = None, obs_context: Optional[LexicalContext] = None
+) -> Any:
   """
   Evaluate calculator source code and return the result.
 
   Args:
       source: Calculator language source code
       variables: Optional initial variable values
+      obs_context: Optional observability context
 
   Returns:
       The value of the last expression or None
@@ -369,12 +375,16 @@ def evaluate_calc(source: str, variables: Optional[Dict[str, Any]] = None) -> An
       >>> evaluate_calc("let x = 10; let y = 20; x + y")
       30
   """
+  # Use provided context or create one
+  if obs_context is None:
+    obs_context = LexicalContext()
+
   # Phase 1: Tokenize
-  lexer = CalcLexer()
+  lexer = CalcLexer(obs_context)
   tokens = list(lexer.lex(source))
 
   # Phase 2: Parse to CST
-  parser = CalcParser(tokens)
+  parser = CalcParser(tokens, obs_context)
   cst = parser.parse()
 
   # Phase 3: Build AST
@@ -398,7 +408,18 @@ def evaluate_calc(source: str, variables: Optional[Dict[str, Any]] = None) -> An
 # ===== Example Usage =====
 
 if __name__ == "__main__":
-  print("=== Mini Calculator Language Demo ===\n")
+  # Initialize observability with shared context
+  print("=== Setting up Observability ===")
+  config = ObservabilityConfig(
+    handlers=[PrintHandler(sys.stderr, format="{timestamp_ms:8.1f}ms {type}: {value}", include_context=True)]
+  )
+  SharedContext.setup(config)
+  print(f"Handler count: {SharedContext.get().get_handler_count()}")
+
+  # Create lexical context that uses the shared context
+  obs_context = LexicalContext()
+
+  print("\n=== Mini Calculator Language Demo ===\n")
 
   # Test cases demonstrating the language features
   examples = [
@@ -411,13 +432,14 @@ if __name__ == "__main__":
   ]
 
   for source, description in examples:
-    print(f"{description}: {source}")
+    print(f"\n{description}: {source}")
+    print("-" * 50)
     try:
-      result = evaluate_calc(source)
-      print(f"Result: {result}")
+      result = evaluate_calc(source, obs_context=obs_context)
+      print(f"\nResult: {result}")
 
-      # Also show the generated Python code
-      lexer = CalcLexer()
+      # Also show the generated Python code (without observability)
+      lexer = CalcLexer()  # No context for cleaner output
       tokens = list(lexer.lex(source))
       parser = CalcParser(tokens)
       cst = parser.parse()
@@ -427,37 +449,6 @@ if __name__ == "__main__":
 
     except Exception as e:
       print(f"Error: {e}")
-    print()
 
-  # # Interactive mode
-  # print("\n=== Interactive Mode ===")
-  # print("Enter expressions (or 'quit' to exit):")
-
-  # variables = {}
-  # while True:
-  #   try:
-  #     source = input("> ").strip()
-  #     if source.lower() == "quit":
-  #       break
-  #     if not source:
-  #       continue
-
-  #     result = evaluate_calc(source, variables)
-  #     if result is not None:
-  #       print(f"= {result}")
-
-  #     # Update variables for next evaluation
-  #     lexer = CalcLexer()
-  #     tokens = list(lexer.lex(source))
-  #     parser = CalcParser(tokens)
-  #     cst = parser.parse()
-  #     ast = ASTBuilder().visit(cst.root)
-
-  #     # Extract assignments to maintain state
-  #     for stmt in ast.statements:
-  #       if isinstance(stmt, Assignment):
-  #         value = evaluate_calc(f"{PythonCodeGenerator()._generate_expression(stmt.value)}", variables)
-  #         variables[stmt.name] = value
-
-  #   except Exception as e:
-  #     print(f"Error: {e}")
+  # Note: Interactive mode disabled to avoid cluttering output with traces
+  print("\n=== Observability enabled - traces written to stderr ===")
