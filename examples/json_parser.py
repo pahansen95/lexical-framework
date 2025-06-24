@@ -6,13 +6,18 @@ through four distinct phases: tokenization, CST construction, AST generation,
 and Python object building.
 """
 
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, Optional
 from dataclasses import dataclass
+import argparse
+import sys
+import json
 
 from lexical.tokenize import Lexer, pattern
 from lexical.parse import Parser, rule, ParseError
 from lexical.tree import SyntaxTree, NodeView, TreeVisitor
-from observability import SharedContext
+from lexical.observe import LexicalContext
+from observability import SharedContext, ObservabilityConfig
+from observability.handlers import PrintHandler
 
 
 # ===== Phase 1: Tokenization =====
@@ -61,8 +66,8 @@ class JSONParser(Parser):
   enabling accurate source reconstruction and detailed analysis.
   """
 
-  def __init__(self, tokens):
-    super().__init__(tokens)
+  def __init__(self, tokens, obs_context: Optional[LexicalContext] = None):
+    super().__init__(tokens, obs_context)
     # JSON doesn't need structural token handling
     self.skip_structural = True
 
@@ -315,7 +320,7 @@ class JSONObjectBuilder:
 # ===== Public API =====
 
 
-def parse_json(text: str) -> Any:
+def parse_json(text: str, obs_context: Optional[LexicalContext] = None) -> Any:
   """
   Parse JSON text into Python objects.
 
@@ -327,6 +332,7 @@ def parse_json(text: str) -> Any:
 
   Args:
       text: JSON string to parse
+      obs_context: Optional observability context
 
   Returns:
       Python object representation of the JSON
@@ -336,11 +342,11 @@ def parse_json(text: str) -> Any:
       {'name': 'John', 'age': 30}
   """
   # Phase 1: Tokenize
-  lexer = JSONLexer()
+  lexer = JSONLexer(obs_context)
   tokens = list(lexer.lex(text))
 
   # Phase 2: Parse to CST
-  parser = JSONParser(tokens)
+  parser = JSONParser(tokens, obs_context)
   cst = parser.parse()
 
   # Phase 3: Build AST
@@ -352,29 +358,29 @@ def parse_json(text: str) -> Any:
   return object_builder.build(ast)
 
 
-def parse_json_to_cst(text: str) -> SyntaxTree:
+def parse_json_to_cst(text: str, obs_context: Optional[LexicalContext] = None) -> SyntaxTree:
   """
   Parse JSON to CST for inspection.
 
   Useful for debugging or syntax-aware tools that need to
   preserve formatting and structure.
   """
-  lexer = JSONLexer()
+  lexer = JSONLexer(obs_context)
   tokens = list(lexer.lex(text))
-  parser = JSONParser(tokens)
+  parser = JSONParser(tokens, obs_context)
   return parser.parse()
 
 
-def parse_json_to_ast(text: str) -> JSONValue:
+def parse_json_to_ast(text: str, obs_context: Optional[LexicalContext] = None) -> JSONValue:
   """
   Parse JSON to AST for analysis.
 
   Returns the intermediate AST representation before conversion
   to Python objects.
   """
-  lexer = JSONLexer()
+  lexer = JSONLexer(obs_context)
   tokens = list(lexer.lex(text))
-  parser = JSONParser(tokens)
+  parser = JSONParser(tokens, obs_context)
   cst = parser.parse()
 
   ast_builder = JSONASTBuilder()
@@ -383,11 +389,29 @@ def parse_json_to_ast(text: str) -> JSONValue:
 
 # ===== Example Usage =====
 
-if __name__ == "__main__":
-  import json
 
-  # Initialize shared context once
-  SharedContext.setup()
+def main():
+  """Main entry point with command-line argument handling."""
+  # Parse command line arguments
+  parser = argparse.ArgumentParser(description="JSON Parser Demo")
+  parser.add_argument("-q", "--quiet", action="store_true", help="Suppress observability traces")
+  args = parser.parse_args()
+
+  # Initialize observability based on quiet flag
+  obs_context = None
+  if not args.quiet:
+    print("=== Setting up Observability ===")
+    config = ObservabilityConfig(
+      handlers=[PrintHandler(sys.stderr, format="{timestamp_ms:8.1f}ms {type}: {value}", include_context=True)]
+    )
+    SharedContext.setup(config)
+    print(f"Handler count: {SharedContext.get().get_handler_count()}")
+
+    # Create lexical context that uses the shared context
+    obs_context = LexicalContext()
+    print("\n=== JSON Parser Test Suite (with tracing) ===\n")
+  else:
+    print("=== JSON Parser Test Suite (quiet mode) ===\n")
 
   # Test data
   test_cases = [
@@ -399,14 +423,12 @@ if __name__ == "__main__":
     "{}",
   ]
 
-  print("=== JSON Parser Test Suite ===\n")
-
   for i, test in enumerate(test_cases, 1):
     print(f"Test {i}: {test}")
 
     try:
       # Parse with our implementation
-      result = parse_json(test)
+      result = parse_json(test, obs_context)
       print(f"Parsed: {result}")
 
       # Verify against standard library
@@ -422,7 +444,7 @@ if __name__ == "__main__":
 
     print()
 
-  # Demonstrate CST inspection
+  # Demonstrate CST inspection (without observability for cleaner output)
   print("=== CST Inspection ===")
   cst = parse_json_to_cst('{"x": [1, 2]}')
   print(cst.dump())
@@ -432,3 +454,13 @@ if __name__ == "__main__":
   ast = parse_json_to_ast('{"x": [1, 2]}')
   print(f"Root type: {type(ast).__name__}")
   print(f"Members: {ast.members if hasattr(ast, 'members') else 'N/A'}")
+
+  # Final message
+  if not args.quiet:
+    print("\n=== Observability enabled - traces written to stderr ===")
+  else:
+    print("\n=== Completed in quiet mode ===")
+
+
+if __name__ == "__main__":
+  main()

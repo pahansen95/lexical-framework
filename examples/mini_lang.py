@@ -15,6 +15,8 @@ Grammar:
 
 from typing import Any, Dict, List, Optional, Union
 from dataclasses import dataclass
+import argparse
+import sys
 
 from lexical.tokenize import Lexer, pattern
 from lexical.parse import Parser, rule, ParseError
@@ -22,7 +24,6 @@ from lexical.tree import NodeView, TreeVisitor
 from lexical.observe import LexicalContext
 from observability import SharedContext, ObservabilityConfig
 from observability.handlers import PrintHandler
-import sys
 
 
 # ===== Phase 1: Tokenization =====
@@ -375,10 +376,6 @@ def evaluate_calc(
       >>> evaluate_calc("let x = 10; let y = 20; x + y")
       30
   """
-  # Use provided context or create one
-  if obs_context is None:
-    obs_context = LexicalContext()
-
   # Phase 1: Tokenize
   lexer = CalcLexer(obs_context)
   tokens = list(lexer.lex(source))
@@ -407,19 +404,29 @@ def evaluate_calc(
 
 # ===== Example Usage =====
 
-if __name__ == "__main__":
-  # Initialize observability with shared context
-  print("=== Setting up Observability ===")
-  config = ObservabilityConfig(
-    handlers=[PrintHandler(sys.stderr, format="{timestamp_ms:8.1f}ms {type}: {value}", include_context=True)]
-  )
-  SharedContext.setup(config)
-  print(f"Handler count: {SharedContext.get().get_handler_count()}")
 
-  # Create lexical context that uses the shared context
-  obs_context = LexicalContext()
+def main():
+  """Main entry point with command-line argument handling."""
+  # Parse command line arguments
+  parser = argparse.ArgumentParser(description="Mini Calculator Language Demo")
+  parser.add_argument("-q", "--quiet", action="store_true", help="Suppress observability traces")
+  args = parser.parse_args()
 
-  print("\n=== Mini Calculator Language Demo ===\n")
+  # Initialize observability based on quiet flag
+  obs_context = None
+  if not args.quiet:
+    print("=== Setting up Observability ===")
+    config = ObservabilityConfig(
+      handlers=[PrintHandler(sys.stderr, format="{timestamp_ms:8.1f}ms {type}: {value}", include_context=True)]
+    )
+    SharedContext.setup(config)
+    print(f"Handler count: {SharedContext.get().get_handler_count()}")
+
+    # Create lexical context that uses the shared context
+    obs_context = LexicalContext()
+    print("\n=== Mini Calculator Language Demo (with tracing) ===\n")
+  else:
+    print("=== Mini Calculator Language Demo (quiet mode) ===\n")
 
   # Test cases demonstrating the language features
   examples = [
@@ -432,13 +439,12 @@ if __name__ == "__main__":
   ]
 
   for source, description in examples:
-    print(f"\n{description}: {source}")
-    print("-" * 50)
+    print(f"{description}: {source}")
     try:
       result = evaluate_calc(source, obs_context=obs_context)
-      print(f"\nResult: {result}")
+      print(f"Result: {result}")
 
-      # Also show the generated Python code (without observability)
+      # Also show the generated Python code (always without observability)
       lexer = CalcLexer()  # No context for cleaner output
       tokens = list(lexer.lex(source))
       parser = CalcParser(tokens)
@@ -449,6 +455,14 @@ if __name__ == "__main__":
 
     except Exception as e:
       print(f"Error: {e}")
+    print()
 
-  # Note: Interactive mode disabled to avoid cluttering output with traces
-  print("\n=== Observability enabled - traces written to stderr ===")
+  # Final message
+  if not args.quiet:
+    print("=== Observability enabled - traces written to stderr ===")
+  else:
+    print("=== Completed in quiet mode ===")
+
+
+if __name__ == "__main__":
+  main()
