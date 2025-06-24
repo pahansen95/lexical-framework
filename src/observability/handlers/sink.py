@@ -18,7 +18,7 @@ class PrintHandler:
   def __init__(
     self,
     stream: TextIO = sys.stdout,
-    format: str = "{timestamp_ms:8.1f}ms {type}: {value}",
+    format: str = "{timestamp_ns:16d}ns {type}: {value}",
     include_context: bool = True,
   ):
     self.stream = stream

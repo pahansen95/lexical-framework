@@ -51,7 +51,6 @@ def format_event_simple(event: EventDict, template: str) -> str:
   """
   # Prepare format dict with computed fields
   fmt_dict = event.copy()
-  fmt_dict["timestamp_ms"] = event["timestamp_ns"] / 1_000_000
 
   try:
     return template.format(**fmt_dict)

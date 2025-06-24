@@ -132,3 +132,61 @@ class AsyncHandlerWorker:
       self.queue.put_nowait(event)
     except queue.Full:
       safe_handler_call("AsyncHandler", "queue full", RuntimeError("Event queue full"))
+
+
+class TimeDeltaHandler:
+  """
+  Enriches events with microsecond timestamps and time deltas.
+
+  Adds computed fields to each event:
+  - timestamp_us: Absolute time in microseconds since start
+  - delta_ns: Nanoseconds since previous event
+  - delta_us: Microseconds since previous event (for display)
+
+  Thread-safe for use across multiple threads emitting to the same handler.
+  Create separate instances if tracking independent event streams.
+  """
+
+  def __init__(self, wrapped_handler: EventHandler):
+    """
+    Initialize with wrapped handler.
+
+    Args:
+        wrapped_handler: Handler to receive enriched events
+    """
+    self.wrapped_handler = wrapped_handler
+    self.last_timestamp_ns: Optional[int] = None
+    self._lock = threading.Lock()
+
+  def __call__(self, event: EventDict) -> None:
+    """
+    Process event with time enrichment.
+
+    Adds timing fields and forwards to wrapped handler.
+    """
+    # Calculate deltas thread-safely
+    current_ns = event["timestamp_ns"]
+
+    with self._lock:
+      if self.last_timestamp_ns is None:
+        delta_ns = 0  # First event baseline
+      else:
+        delta_ns = current_ns - self.last_timestamp_ns
+
+      self.last_timestamp_ns = current_ns
+
+    # Create enriched event
+    enriched = event.copy()
+    enriched["delta_ns"] = delta_ns
+    enriched["delta_us"] = delta_ns / 1_000
+    enriched["delta_ms"] = delta_ns / 1_000_000
+    enriched["timestamp_us"] = current_ns / 1_000
+    enriched["timestamp_ms"] = current_ns / 1_000_000
+
+    # Forward to wrapped handler
+    self.wrapped_handler(enriched)
+
+  def reset(self) -> None:
+    """Reset delta tracking for new trace session."""
+    with self._lock:
+      self.last_timestamp_ns = None

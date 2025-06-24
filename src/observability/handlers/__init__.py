@@ -54,7 +54,7 @@ Events propagate through handler trees:
 
 # Import handler classes directly
 from .sink import PrintHandler, JsonHandler
-from .control import filtered, sampled, AsyncHandlerWorker
+from .control import filtered, sampled, AsyncHandlerWorker, TimeDeltaHandler
 from .composite import FanoutHandler, FallbackHandler
 from .resource import ManagedFileHandler, BufferHandler
 
@@ -67,6 +67,7 @@ __all__ = [
   "filtered",
   "sampled",
   "AsyncHandlerWorker",
+  "TimeDeltaHandler",
   # Composite handlers
   "FanoutHandler",
   "FallbackHandler",

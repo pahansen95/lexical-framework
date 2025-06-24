@@ -39,7 +39,7 @@ import sys
 import atexit
 
 from .core import ObservabilityConfig, ObservabilityContext, create_observability
-from .handlers.sink import PrintHandler
+from .handlers import PrintHandler, TimeDeltaHandler
 
 
 class SharedContext:
@@ -65,7 +65,10 @@ class SharedContext:
 
       # Use provided config or create default
       if config is None:
-        config = ObservabilityConfig(handlers=[PrintHandler(sys.stderr)], sampling_rate=1.0)
+        base_handler = PrintHandler(
+          sys.stderr, format="{timestamp_ms:10.1f}ms (+{delta_us:3.0f}μs) {type}: {value}", include_context=True
+        )
+        config = ObservabilityConfig(handlers=[TimeDeltaHandler(base_handler)], sampling_rate=1.0)
 
       # Create and start context
       cls._ctx = create_observability(config)

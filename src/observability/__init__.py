@@ -77,6 +77,7 @@ from .handlers import (
   filtered,
   sampled,
   AsyncHandlerWorker,
+  TimeDeltaHandler,
   FanoutHandler,
   FallbackHandler,
 )
@@ -108,6 +109,7 @@ __all__ = [
   "filtered",
   "sampled",
   "AsyncHandlerWorker",
+  "TimeDeltaHandler",
   "FanoutHandler",
   "FallbackHandler",
   # Types
