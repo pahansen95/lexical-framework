@@ -93,6 +93,17 @@ class PatternNamespace:
   """Factory for pattern creation."""
 
   @staticmethod
+  def _static_matcher(
+    func: Callable[[SourceNavigator], Optional[Match]],
+  ) -> Callable[["Lexer", SourceNavigator], Optional[Match]]:
+    """Wrap static matchers to accept lexer argument for uniform interface."""
+
+    def wrapper(lexer: "Lexer", nav: SourceNavigator) -> Optional[Match]:
+      return func(nav)
+
+    return wrapper
+
+  @staticmethod
   def regex(
     regex_str: str,
     skip: bool = False,
@@ -109,7 +120,13 @@ class PatternNamespace:
         return Match(m.group(0), len(m.group(0)))
       return None
 
-    return Pattern(matcher=matcher, skip=skip, priority=priority, at_line_start=at_line_start, when=when)
+    return Pattern(
+      matcher=PatternNamespace._static_matcher(matcher),
+      skip=skip,
+      priority=priority,
+      at_line_start=at_line_start,
+      when=when,
+    )
 
   @staticmethod
   def literal(
@@ -126,7 +143,13 @@ class PatternNamespace:
         return Match(text, len(text))
       return None
 
-    return Pattern(matcher=matcher, skip=skip, priority=priority, at_line_start=at_line_start, when=when)
+    return Pattern(
+      matcher=PatternNamespace._static_matcher(matcher),
+      skip=skip,
+      priority=priority,
+      at_line_start=at_line_start,
+      when=when,
+    )
 
   @staticmethod
   def method(method: Callable[["Lexer", SourceNavigator], Optional[Match]]) -> Pattern:

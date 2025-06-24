@@ -64,7 +64,7 @@ class NodeView:
   the underlying frozen structure.
   """
 
-  __slots__ = ("_frozen", "_parent_ref", "_index", "_child_views")
+  __slots__ = ("_frozen", "_parent_ref", "_index", "_child_views", "__weakref__")
 
   def __init__(self, frozen: FrozenElement, parent: Optional["NodeView"] = None, index: int = 0):
     self._frozen = frozen

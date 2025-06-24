@@ -245,7 +245,7 @@ class LexicalContext:
     if position is not None:
       metadata["position"] = position
 
-    self._context.emit_event(PARSE_RULE_ENTER, name, **metadata)
+    self._context.emit(PARSE_RULE_ENTER, name, **metadata)
 
     try:
       yield
@@ -264,7 +264,7 @@ class LexicalContext:
         "span_id": span_id,
       }
 
-      self._context.emit_event(PARSE_RULE_EXIT, name, **metadata)
+      self._context.emit(PARSE_RULE_EXIT, name, **metadata)
 
   def emit_token(self, token_type: str, value: str, position: Optional[Position] = None) -> None:
     """
@@ -293,7 +293,7 @@ class LexicalContext:
         if fragment:
           metadata["source_fragment"] = fragment
 
-    self._context.emit_event(LEX_TOKEN_EMIT, value, **metadata)
+    self._context.emit(LEX_TOKEN_EMIT, value, **metadata)
 
   def emit_search_start(self, position: Position) -> None:
     """
@@ -306,7 +306,7 @@ class LexicalContext:
       return
 
     metadata = {"position": position}
-    self._context.emit_event("lex.search.start", None, **metadata)
+    self._context.emit("lex.search.start", None, **metadata)
 
   def emit_backtrack(self, rule: str, reason: str) -> None:
     """
@@ -326,7 +326,7 @@ class LexicalContext:
       metadata["parse_stack"] = list(stack)
       metadata["parse_depth"] = len(stack)
 
-    self._context.emit_event(PARSE_BACKTRACK, reason, **metadata)
+    self._context.emit(PARSE_BACKTRACK, reason, **metadata)
 
   def emit_error(self, message: str, position: Optional[Position] = None) -> None:
     """
@@ -343,7 +343,7 @@ class LexicalContext:
     if position:
       metadata["position"] = position
 
-    self._context.emit_event("error", message, **metadata)
+    self._context.emit("error", message, **metadata)
 
   def emit_event(self, event_type: str, value: Any = None, **metadata: Any) -> None:
     """
@@ -357,7 +357,7 @@ class LexicalContext:
     if not self._context.has_handlers():
       return
 
-    self._context.emit_event(event_type, value, **metadata)
+    self._context.emit(event_type, value, **metadata)
 
   def emit_ast_node(self, node_type: str, attributes: Mapping[str, Any], position: Optional[Position] = None) -> None:
     """
@@ -381,7 +381,7 @@ class LexicalContext:
     if position is not None:
       metadata["position"] = position
 
-    self._context.emit_event(AST_NODE_CREATE, node_type, **metadata)
+    self._context.emit(AST_NODE_CREATE, node_type, **metadata)
 
   def emit_state_transition(self, from_state: str, to_state: str) -> None:
     """
@@ -402,7 +402,7 @@ class LexicalContext:
       metadata["parse_depth"] = len(stack)
 
     value = f"{from_state} -> {to_state}"
-    self._context.emit_event(LEX_STATE_TRANSITION, value, **metadata)
+    self._context.emit(LEX_STATE_TRANSITION, value, **metadata)
 
   def state_change(self, state_name: str, old_value: Any, new_value: Any) -> None:
     """
@@ -418,7 +418,7 @@ class LexicalContext:
 
     metadata = {"state_name": state_name, "old_value": old_value, "new_value": new_value}
 
-    self._context.emit_event("state.change", state_name, **metadata)
+    self._context.emit("state.change", state_name, **metadata)
 
   def _extract_fragment(self, position: Position) -> str:
     """

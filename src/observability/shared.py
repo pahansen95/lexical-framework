@@ -38,7 +38,7 @@ import threading
 import sys
 import atexit
 
-from .core import ObservabilityConfig, ObservabilityContext
+from .core import ObservabilityConfig, ObservabilityContext, create_observability
 from .handlers.sink import PrintHandler
 
 
@@ -68,8 +68,8 @@ class SharedContext:
         config = ObservabilityConfig(handlers=[PrintHandler(sys.stderr)], sampling_rate=1.0)
 
       # Create and start context
-      cls._ctx = ObservabilityContext(config)
-      cls._ctx.start()
+      cls._ctx = create_observability(config)
+      # cls._ctx.start() # TODO: We need to address Handler Lifecycle Management
 
       # Register cleanup only once
       if not cls._cleanup_registered:
@@ -95,7 +95,7 @@ class SharedContext:
     """Explicitly teardown the shared context."""
     with cls._lock:
       if cls._ctx is not None:
-        cls._ctx.shutdown()
+        # cls._ctx.shutdown() # TODO: We need to address Handler Lifecycle Management
         cls._ctx = None
 
   @classmethod

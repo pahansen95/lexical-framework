@@ -5,11 +5,11 @@ Provides unified parsing and tree construction through a single coherent
 system, eliminating coordination complexity between separate components.
 """
 
-from typing import List, Optional, Callable, TypeVar, Generic, NamedTuple, Dict, Tuple
+from typing import List, Optional, Callable, TypeVar, NamedTuple, Dict, Tuple
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from .tree import SyntaxTree, NodeView, FrozenNode, FrozenToken, FrozenElement
+from .tree import SyntaxTree, FrozenNode, FrozenToken, FrozenElement
 from .observe import LexicalContext
 from .tokenize import Token
 from .position import Position
@@ -316,7 +316,7 @@ class Parser:
 
   def parse(self) -> SyntaxTree:
     """Parse tokens into syntax tree."""
-    with self._obs.rule("parse", build=False):  # Don't build a parse node
+    with self.rule("parse", build=False):  # Don't build a parse node
       try:
         # Parse using grammar root
         self.parse_root()
