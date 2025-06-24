@@ -1,34 +1,44 @@
 """
-JSON Parser using Frozen Tree Framework
+JSON Parser Implementation
 
-Demonstrates parsing JSON into immutable syntax trees with automatic
-CST construction and value extraction through visitors.
+A complete JSON parser demonstrating the lexical framework's capabilities
+through four distinct phases: tokenization, CST construction, AST generation,
+and Python object building.
 """
 
-from typing import Any, Dict, List
-from lex import Lexer, pattern
-from parse import Parser, rule, Visitor, ParseError
-from tree import SyntaxTree, NodeView
+from typing import Any, Dict, List, Union
+from dataclasses import dataclass
+
+from lexical.tokenize import Lexer, pattern
+from lexical.parse import Parser, rule, ParseError
+from lexical.tree import SyntaxTree, NodeView, TreeVisitor
+from observability import SharedContext
 
 
-# ===== JSON Lexer =====
+# ===== Phase 1: Tokenization =====
 
 
 class JSONLexer(Lexer):
-  """Tokenizes JSON input"""
+  """
+  Tokenizes JSON input into a stream of typed tokens.
 
-  # Literals
+  The lexer recognizes JSON's grammatical elements: literals (null, true, false),
+  numbers, strings, and structural punctuation. Whitespace is automatically
+  skipped to produce a clean token stream.
+  """
+
+  # Literal tokens with high priority to avoid identifier conflicts
   NULL = pattern.literal("null", priority=10)
   TRUE = pattern.literal("true", priority=10)
   FALSE = pattern.literal("false", priority=10)
 
-  # Numbers (simplified - doesn't handle all edge cases)
+  # Number pattern: optional minus, digits, optional decimal, optional exponent
   NUMBER = pattern.regex(r"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?", priority=5)
 
-  # Strings (basic escape handling)
+  # String pattern: quoted text with basic escape sequences
   STRING = pattern.regex(r'"(?:[^"\\]|\\.)*"', priority=5)
 
-  # Punctuation
+  # Structural tokens
   LBRACE = pattern.literal("{")
   RBRACE = pattern.literal("}")
   LBRACKET = pattern.literal("[")
@@ -36,33 +46,38 @@ class JSONLexer(Lexer):
   COMMA = pattern.literal(",")
   COLON = pattern.literal(":")
 
-  # Whitespace (skip)
+  # Skip whitespace automatically
   WHITESPACE = pattern.regex(r"[ \t\r\n]+", skip=True)
 
 
-# ===== JSON Parser =====
+# ===== Phase 2: CST Construction =====
 
 
 class JSONParser(Parser):
-  """Parses JSON into frozen syntax trees"""
+  """
+  Parses JSON tokens into a Concrete Syntax Tree.
+
+  The CST preserves all syntactic structure, including punctuation,
+  enabling accurate source reconstruction and detailed analysis.
+  """
 
   def __init__(self, tokens):
     super().__init__(tokens)
     # JSON doesn't need structural token handling
     self.skip_structural = True
 
-  @rule
-  def json(self):
-    """JSON root - any value"""
+  def parse_root(self):
+    """Entry point: JSON document is a single value."""
     self.value()
 
+  @rule()
   def value(self):
-    """JSON value - object, array, string, number, or literal"""
-    self.choice(self.object, self.array, self.string, self.number, self.literal)
+    """JSON value: object, array, or primitive."""
+    self.choice(self.object, self.array, self.string, self.number, self.boolean, self.null)
 
-  @rule
+  @rule()
   def object(self):
-    """JSON object - { members? }"""
+    """Object: { member, member, ... }"""
     self.expect("LBRACE")
 
     if not self.match("RBRACE"):
@@ -70,16 +85,16 @@ class JSONParser(Parser):
 
     self.expect("RBRACE")
 
-  @rule
+  @rule()
   def member(self):
-    """Object member - string : value"""
+    """Object member: string : value"""
     self.string()
     self.expect("COLON")
     self.value()
 
-  @rule
+  @rule()
   def array(self):
-    """JSON array - [ elements? ]"""
+    """Array: [ value, value, ... ]"""
     self.expect("LBRACKET")
 
     if not self.match("RBRACKET"):
@@ -88,140 +103,282 @@ class JSONParser(Parser):
     self.expect("RBRACKET")
 
   def string(self):
-    """String literal"""
+    """String literal token."""
     self.expect("STRING")
 
   def number(self):
-    """Number literal"""
+    """Number literal token."""
     self.expect("NUMBER")
 
-  def literal(self):
-    """true/false/null"""
-    if self.match("TRUE", "FALSE", "NULL"):
+  def boolean(self):
+    """Boolean literal: true or false."""
+    if self.match("TRUE", "FALSE"):
       self.consume()
     else:
-      raise ParseError("Expected literal (true, false, null)")
+      raise ParseError("Expected boolean literal")
 
-  def parse_root(self):
-    """Parse JSON grammar root"""
-    self.json()
-
-
-# ===== JSON Value Extractor =====
+  def null(self):
+    """Null literal."""
+    self.expect("NULL")
 
 
-class JSONValueExtractor(Visitor):
-  """Extract Python values from JSON syntax tree"""
+# ===== Phase 3: AST Generation =====
 
-  def visit_json(self, node: NodeView) -> Any:
-    """Root node contains the value"""
-    # JSON node has one child - the value
-    return self.visit(node.children[0])
 
-  def visit_object(self, node: NodeView) -> Dict[str, Any]:
-    """Convert to Python dict"""
-    result = {}
+@dataclass
+class JSONValue:
+  """Base class for JSON AST nodes."""
 
-    # Object contains: LBRACE, members..., RBRACE
+  pass
+
+
+@dataclass
+class JSONObject(JSONValue):
+  """Object with key-value pairs."""
+
+  members: Dict[str, JSONValue]
+
+
+@dataclass
+class JSONArray(JSONValue):
+  """Array of values."""
+
+  elements: List[JSONValue]
+
+
+@dataclass
+class JSONString(JSONValue):
+  """String value."""
+
+  value: str
+
+
+@dataclass
+class JSONNumber(JSONValue):
+  """Numeric value."""
+
+  value: Union[int, float]
+
+
+@dataclass
+class JSONBoolean(JSONValue):
+  """Boolean value."""
+
+  value: bool
+
+
+@dataclass
+class JSONNull(JSONValue):
+  """Null value."""
+
+  pass
+
+
+class JSONASTBuilder(TreeVisitor[JSONValue]):
+  """
+  Transforms CST into a simplified AST.
+
+  The AST removes syntactic noise (punctuation, whitespace) and creates
+  semantic nodes representing JSON's data model.
+  """
+
+  def visit_value(self, node: NodeView) -> JSONValue:
+    """Delegate to the actual value node."""
+    # Value node has one child - the actual value
+    for child in node.children:
+      if not child.is_token:  # Skip any tokens, visit nodes
+        return self.visit(child)
+      elif child.kind in ("STRING", "NUMBER", "TRUE", "FALSE", "NULL"):
+        # Direct primitive token
+        return self.visit(child)
+    raise ValueError("No value found in value node")
+
+  def visit_object(self, node: NodeView) -> JSONObject:
+    """Build object from members."""
+    members = {}
+
     for child in node.children:
       if child.kind == "member":
         key, value = self.visit_member(child)
-        result[key] = value
+        members[key] = value
 
-    return result
+    return JSONObject(members)
 
-  def visit_member(self, node: NodeView) -> tuple:
-    """Extract key-value pair"""
-    # Member contains: STRING, COLON, value
-    key_token = node.children[0]
-    value_node = node.children[2]
+  def visit_member(self, node: NodeView) -> tuple[str, JSONValue]:
+    """Extract key-value pair from member."""
+    key = None
+    value = None
 
-    # Remove quotes from string
-    key = key_token.text[1:-1]
-    key = self._unescape_string(key)
-
-    # Get value
-    value = self.visit(value_node)
+    for child in node.children:
+      if child.kind == "STRING" and key is None:
+        key = self._extract_string_value(child.text)
+      elif child.kind == "value":
+        value = self.visit(child)
 
     return key, value
 
-  def visit_array(self, node: NodeView) -> List[Any]:
-    """Convert to Python list"""
-    result = []
+  def visit_array(self, node: NodeView) -> JSONArray:
+    """Build array from elements."""
+    elements = []
 
-    # Array contains: LBRACKET, values..., RBRACKET
     for child in node.children:
-      if child.kind not in ("LBRACKET", "RBRACKET", "COMMA"):
-        result.append(self.visit(child))
+      if child.kind == "value":
+        elements.append(self.visit(child))
 
-    return result
+    return JSONArray(elements)
 
-  def visit_STRING(self, node: NodeView) -> str:
-    """Extract string value"""
-    # Remove quotes and unescape
-    text = node.text[1:-1]
-    return self._unescape_string(text)
+  def visit_STRING(self, node: NodeView) -> JSONString:
+    """Convert string token to AST node."""
+    return JSONString(self._extract_string_value(node.text))
 
-  def visit_NUMBER(self, node: NodeView) -> float:
-    """Extract number value"""
-    if "." in node.text or "e" in node.text or "E" in node.text:
-      return float(node.text)
-    return int(node.text)
+  def visit_NUMBER(self, node: NodeView) -> JSONNumber:
+    """Convert number token to AST node."""
+    text = node.text
+    if "." in text or "e" in text or "E" in text:
+      return JSONNumber(float(text))
+    return JSONNumber(int(text))
 
-  def visit_TRUE(self, node: NodeView) -> bool:
-    return True
+  def visit_TRUE(self, node: NodeView) -> JSONBoolean:
+    """True literal."""
+    return JSONBoolean(True)
 
-  def visit_FALSE(self, node: NodeView) -> bool:
-    return False
+  def visit_FALSE(self, node: NodeView) -> JSONBoolean:
+    """False literal."""
+    return JSONBoolean(False)
 
-  def visit_NULL(self, node: NodeView) -> None:
-    return None
+  def visit_NULL(self, node: NodeView) -> JSONNull:
+    """Null literal."""
+    return JSONNull()
 
-  def generic_visit(self, node: NodeView) -> Any:
-    """For nodes we don't handle, visit first non-structural child"""
-    for child in node.children:
-      if child.kind not in ("COMMA", "COLON"):
-        return self.visit(child)
-    return None
+  def generic_visit(self, node: NodeView) -> JSONValue:
+    """Fallback for unexpected nodes."""
+    raise ValueError(f"Unexpected node type: {node.kind}")
 
-  def _unescape_string(self, text: str) -> str:
-    """Handle basic escape sequences"""
-    return (
-      text.replace(r"\"", '"')
-      .replace(r"\\", "\\")
-      .replace(r"\/", "/")
-      .replace(r"\b", "\b")
-      .replace(r"\f", "\f")
-      .replace(r"\n", "\n")
-      .replace(r"\r", "\r")
-      .replace(r"\t", "\t")
-    )
+  def _extract_string_value(self, quoted: str) -> str:
+    """Remove quotes and process escape sequences."""
+    # Remove surrounding quotes
+    content = quoted[1:-1]
+
+    # Process basic escape sequences
+    replacements = {
+      r"\"": '"',
+      r"\\": "\\",
+      r"\/": "/",
+      r"\b": "\b",
+      r"\f": "\f",
+      r"\n": "\n",
+      r"\r": "\r",
+      r"\t": "\t",
+    }
+
+    for escape, char in replacements.items():
+      content = content.replace(escape, char)
+
+    return content
 
 
-# ===== Convenience Functions =====
+# ===== Phase 4: Python Object Building =====
+
+
+class JSONObjectBuilder:
+  """
+  Converts JSON AST to native Python objects.
+
+  This final transformation produces standard Python data structures
+  that can be used directly in applications.
+  """
+
+  def build(self, ast: JSONValue) -> Any:
+    """Convert AST node to Python object."""
+    if isinstance(ast, JSONObject):
+      return {key: self.build(value) for key, value in ast.members.items()}
+
+    elif isinstance(ast, JSONArray):
+      return [self.build(element) for element in ast.elements]
+
+    elif isinstance(ast, JSONString):
+      return ast.value
+
+    elif isinstance(ast, JSONNumber):
+      return ast.value
+
+    elif isinstance(ast, JSONBoolean):
+      return ast.value
+
+    elif isinstance(ast, JSONNull):
+      return None
+
+    else:
+      raise ValueError(f"Unknown AST node type: {type(ast)}")
+
+
+# ===== Public API =====
 
 
 def parse_json(text: str) -> Any:
-  """Parse JSON text into Python objects"""
-  # Tokenize
+  """
+  Parse JSON text into Python objects.
+
+  This function orchestrates the complete parsing pipeline:
+  1. Tokenize the input
+  2. Parse tokens into CST
+  3. Transform CST to AST
+  4. Build Python objects from AST
+
+  Args:
+      text: JSON string to parse
+
+  Returns:
+      Python object representation of the JSON
+
+  Example:
+      >>> parse_json('{"name": "John", "age": 30}')
+      {'name': 'John', 'age': 30}
+  """
+  # Phase 1: Tokenize
   lexer = JSONLexer()
   tokens = list(lexer.lex(text))
 
-  # Parse to syntax tree
+  # Phase 2: Parse to CST
   parser = JSONParser(tokens)
-  tree = parser.parse()
+  cst = parser.parse()
 
-  # Extract values
-  extractor = JSONValueExtractor()
-  return extractor.visit(tree.root)
+  # Phase 3: Build AST
+  ast_builder = JSONASTBuilder()
+  ast = ast_builder.visit(cst.root)
+
+  # Phase 4: Build Python objects
+  object_builder = JSONObjectBuilder()
+  return object_builder.build(ast)
 
 
-def parse_json_tree(text: str) -> SyntaxTree:
-  """Parse JSON text to syntax tree for inspection"""
+def parse_json_to_cst(text: str) -> SyntaxTree:
+  """
+  Parse JSON to CST for inspection.
+
+  Useful for debugging or syntax-aware tools that need to
+  preserve formatting and structure.
+  """
   lexer = JSONLexer()
   tokens = list(lexer.lex(text))
   parser = JSONParser(tokens)
   return parser.parse()
+
+
+def parse_json_to_ast(text: str) -> JSONValue:
+  """
+  Parse JSON to AST for analysis.
+
+  Returns the intermediate AST representation before conversion
+  to Python objects.
+  """
+  lexer = JSONLexer()
+  tokens = list(lexer.lex(text))
+  parser = JSONParser(tokens)
+  cst = parser.parse()
+
+  ast_builder = JSONASTBuilder()
+  return ast_builder.visit(cst.root)
 
 
 # ===== Example Usage =====
@@ -229,59 +386,49 @@ def parse_json_tree(text: str) -> SyntaxTree:
 if __name__ == "__main__":
   import json
 
-  # Example 1: Simple object
-  test1 = '{"name": "John", "age": 30, "active": true}'
+  # Initialize shared context once
+  SharedContext.setup()
 
-  print("=== Example 1: Simple Object ===")
-  print(f"Input: {test1}")
-  result1 = parse_json(test1)
-  print(f"Parsed: {result1}")
-  print(f"Match: {result1 == json.loads(test1)}")
-  print()
+  # Test data
+  test_cases = [
+    '{"name": "John", "age": 30, "active": true}',
+    '[1, 2, 3, "hello", null, false]',
+    '{"users": [{"id": 1}, {"id": 2}], "count": 2}',
+    '{"nested": {"deeply": {"value": 42}}}',
+    "[]",
+    "{}",
+  ]
 
-  # Example 2: Nested structures
-  test2 = """
-    {
-        "users": [
-            {"id": 1, "name": "Alice"},
-            {"id": 2, "name": "Bob"}
-        ],
-        "count": 2,
-        "metadata": {
-            "version": "1.0",
-            "features": ["auth", "api"]
-        }
-    }
-    """
+  print("=== JSON Parser Test Suite ===\n")
 
-  print("=== Example 2: Nested Structures ===")
-  result2 = parse_json(test2)
-  print(f"Parsed: {json.dumps(result2, indent=2)}")
-  print(f"Match: {result2 == json.loads(test2)}")
-  print()
+  for i, test in enumerate(test_cases, 1):
+    print(f"Test {i}: {test}")
 
-  # Example 3: Inspect syntax tree
-  test3 = '{"a": [1, 2, 3]}'
+    try:
+      # Parse with our implementation
+      result = parse_json(test)
+      print(f"Parsed: {result}")
 
-  print("=== Example 3: Syntax Tree ===")
-  print(f"Input: {test3}")
-  tree = parse_json_tree(test3)
-  print("Tree structure:")
-  print(tree.dump())
-  print()
+      # Verify against standard library
+      expected = json.loads(test)
+      if result == expected:
+        print("✓ Matches standard library")
+      else:
+        print("✗ Does not match standard library")
+        print(f"Expected: {expected}")
 
-  # Example 4: Tree navigation
-  print("=== Example 4: Tree Navigation ===")
-  # Find all numbers in the tree
-  numbers = tree.find_all("NUMBER")
-  print(f"Found {len(numbers)} numbers:")
-  for num in numbers:
-    print(f"  {num.text} at position {num.position}")
+    except Exception as e:
+      print(f"✗ Error: {e}")
 
-  # Find the array node
-  arrays = tree.find_all("array")
-  if arrays:
-    array_node = arrays[0]
-    print(f"\nArray has {len(array_node.children)} children:")
-    for child in array_node.children:
-      print(f"  {child.kind}: {child.text or 'node'}")
+    print()
+
+  # Demonstrate CST inspection
+  print("=== CST Inspection ===")
+  cst = parse_json_to_cst('{"x": [1, 2]}')
+  print(cst.dump())
+
+  # Demonstrate AST inspection
+  print("\n=== AST Inspection ===")
+  ast = parse_json_to_ast('{"x": [1, 2]}')
+  print(f"Root type: {type(ast).__name__}")
+  print(f"Members: {ast.members if hasattr(ast, 'members') else 'N/A'}")
