@@ -97,91 +97,140 @@ class Evaluator(TreeVisitor):
 - **Observable**: Built-in instrumentation with zero overhead when disabled
 - **Immutable**: Trees use structural sharing for efficiency
 - **Type-Safe**: Full type annotations for static analysis
-
-## Quick Start
-
-For common use cases, import the main components:
-
-```python
-from lexical import Lexer, Parser, pattern, rule, SyntaxTree
-```
-
-For advanced usage, access specialized components:
-
-```python
-from lexical.tokenize import Token, State, Counter
-from lexical.tree import TreeVisitor, TreeTransformer
-from lexical.observe import LexicalContext
-```
 """
 
-# Core tokenization
+# Core tokenization exports
 from .tokenize import (
+  # Main classes
   Lexer,
-  pattern,
   Token,
+  Pattern,
+  Match,
   LexError,
+  # Pattern factory
+  pattern,
+  # State management
   State,
   Counter,
   Stack,
-  token,  # decorator
+  StateValue,
+  # Decorator
+  token,
 )
 
-# Parsing framework
+# Parsing framework exports
 from .parse import (
+  # Main classes
   Parser,
   ParseError,
-  rule,  # decorator
+  TokenStream,
+  # Internal types (for advanced usage)
+  BuildFrame,
+  ParseState,
+  # Decorator
+  rule,
 )
 
-# Tree structures
+# Tree structure exports
 from .tree import (
+  # Main classes
   SyntaxTree,
   NodeView,
   TreeVisitor,
   TreeTransformer,
-  # Frozen types are internal implementation details
+  # Frozen types (implementation but public)
+  FrozenNode,
+  FrozenToken,
+  FrozenElement,
 )
 
-# Position tracking (consider if these should be public)
+# Position tracking exports
 from .position import (
   Position,
   PositionRange,
+  SourceNavigator,
 )
 
-# Observability
+# Observability exports
 from .observe import (
+  # Context classes
   LexicalContext,
+  NullLexicalContext,
+  # Event constants
+  LEX_TOKEN_EMIT,
+  LEX_STATE_TRANSITION,
+  LEX_BUFFER_OPERATION,
+  LEX_ERROR_RECOVERY,
+  PARSE_RULE_ENTER,
+  PARSE_RULE_EXIT,
+  PARSE_BACKTRACK,
+  PARSE_CACHE_HIT,
+  PARSE_CACHE_MISS,
+  AST_NODE_CREATE,
+  AST_TRANSFORM_APPLY,
+  AST_VALIDATION_CHECK,
 )
 
 # Version info
 __version__ = "0.1.0"
 
-# Public API
+# Comprehensive public API
 __all__ = [
+  # === Tokenization ===
   # Core classes
   "Lexer",
-  "Parser",
-  "SyntaxTree",
-  # Factories and decorators
-  "pattern",
-  "rule",
-  "token",
-  # Data types
   "Token",
-  "NodeView",
-  "Position",
-  "PositionRange",
-  # Errors
+  "Pattern",
+  "Match",
   "LexError",
-  "ParseError",
+  # Pattern factory
+  "pattern",
   # State management
   "State",
   "Counter",
   "Stack",
-  # Tree operations
+  "StateValue",
+  # Decorators
+  "token",
+  # === Parsing ===
+  # Core classes
+  "Parser",
+  "ParseError",
+  "TokenStream",
+  # Internal types
+  "BuildFrame",
+  "ParseState",
+  # Decorators
+  "rule",
+  # === Tree Structures ===
+  # Core classes
+  "SyntaxTree",
+  "NodeView",
   "TreeVisitor",
   "TreeTransformer",
-  # Observability
+  # Frozen types
+  "FrozenNode",
+  "FrozenToken",
+  "FrozenElement",
+  # === Position Tracking ===
+  "Position",
+  "PositionRange",
+  "SourceNavigator",
+  # === Observability ===
+  # Contexts
   "LexicalContext",
+  "NullLexicalContext",
+  # Event constants
+  "LEX_TOKEN_EMIT",
+  "LEX_STATE_TRANSITION",
+  "LEX_BUFFER_OPERATION",
+  "LEX_ERROR_RECOVERY",
+  "PARSE_RULE_ENTER",
+  "PARSE_RULE_EXIT",
+  "PARSE_BACKTRACK",
+  "PARSE_CACHE_HIT",
+  "PARSE_CACHE_MISS",
+  "AST_NODE_CREATE",
+  "AST_TRANSFORM_APPLY",
+  "AST_VALIDATION_CHECK",
 ]
